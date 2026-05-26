@@ -262,6 +262,7 @@ function App() {
   const [fDate, setFDate] = useState(todayStr());
   const [fAmount, setFAmount] = useState('');
   const [fShares, setFShares] = useState('');
+  const [fAvg, setFAvg] = useState('');
   const [fSymbol, setFSymbol] = useState('');
   const [fNote, setFNote] = useState('');
 
@@ -399,6 +400,8 @@ function App() {
 
   const persist = async (next) => {
     setEntries(next);
+    // 최초 로딩이 끝나기 전에는 저장하지 않음 — 클라우드의 기존 기록을 빈 값으로 덮어쓰는 사고 방지
+    if (!loaded) return;
     try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), SHARED); }
     catch (e) { console.error(e); }
   };
@@ -568,7 +571,7 @@ function App() {
   const resetForm = () => {
     setFType('buy');
     setFDate(todayStr());
-    setFAmount(''); setFShares(''); setFSymbol(''); setFNote('');
+    setFAmount(''); setFShares(''); setFAvg(''); setFSymbol(''); setFNote('');
     setFormError('');
     setEditingId(null);
   };
@@ -588,6 +591,7 @@ function App() {
     setFDate(e.date);
     setFAmount(e.amount ? String(e.amount) : '');
     setFShares(e.shares ? String(e.shares) : '');
+    setFAvg(e.avg ? String(e.avg) : '');
     setFSymbol(e.symbol || '');
     setFNote(e.note || '');
     setShowForm(true);
@@ -625,6 +629,14 @@ function App() {
     if (fType === 'buy' || fType === 'sell') {
       const sh = parseNum(fShares);
       if (sh > 0) base.shares = sh;
+
+      // 평단가: 직접 입력값 우선, 비어 있으면 금액÷수량으로 자동 계산
+      const avgInput = parseNum(fAvg);
+      if (avgInput > 0) {
+        base.avg = avgInput;
+      } else if (sh > 0 && amt > 0) {
+        base.avg = amt / sh;
+      }
     }
 
     const next = editingId
@@ -1101,6 +1113,7 @@ function App() {
           fDate={fDate} setFDate={setFDate}
           fAmount={fAmount} setFAmount={setFAmount}
           fShares={fShares} setFShares={setFShares}
+          fAvg={fAvg} setFAvg={setFAvg}
           fSymbol={fSymbol} setFSymbol={setFSymbol}
           fNote={fNote} setFNote={setFNote}
           formError={formError}
@@ -1215,6 +1228,11 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
             {entry.shares > 0 && (
               <span className="text-[13px] font-medium" style={{ color: '#A39E94' }}>
                 {entry.shares}주
+              </span>
+            )}
+            {entry.avg > 0 && (
+              <span className="text-[13px] font-medium" style={{ color: '#A39E94' }}>
+                · 평단 ₩{formatKRW(Math.round(entry.avg))}
               </span>
             )}
           </div>
@@ -1413,7 +1431,7 @@ function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose 
 function FormModal({
   editing, symbols, onAddSymbol, onRemoveSymbol,
   fType, setFType, fAuthor, setFAuthor, fDate, setFDate,
-  fAmount, setFAmount, fShares, setFShares, fSymbol, setFSymbol, fNote, setFNote,
+  fAmount, setFAmount, fShares, setFShares, fAvg, setFAvg, fSymbol, setFSymbol, fNote, setFNote,
   formError, onClose, onSubmit
 }) {
   const [adding, setAdding] = useState(false);
@@ -1665,6 +1683,31 @@ function FormModal({
                   {parseNum(fShares)}주 · 주당 약 {formatKoreanWon(parseNum(fAmount) / parseNum(fShares))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 평단가 (buy/sell) */}
+          {allowShares && (
+            <div className="mb-5">
+              <label className="label">
+                평단가 (₩/주) <span style={{ color:'#A39E94' }}>(선택)</span>
+              </label>
+              <input className="input tabular text-lg"
+                     inputMode="decimal"
+                     placeholder={parseNum(fShares) > 0 && parseNum(fAmount) > 0
+                        ? String(Math.round(parseNum(fAmount) / parseNum(fShares)))
+                        : '50,000'}
+                     value={fAvg}
+                     onChange={e => setFAvg(e.target.value)} />
+              {fAvg && parseNum(fAvg) > 0 ? (
+                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                  평단가 {formatKoreanWon(parseNum(fAvg))} / 주
+                </div>
+              ) : (parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
+                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                  비워두면 금액÷수량({formatKoreanWon(parseNum(fAmount) / parseNum(fShares))})으로 자동 저장돼요
+                </div>
+              ))}
             </div>
           )}
 
