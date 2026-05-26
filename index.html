@@ -5,9 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#F5F4F0" />
 <title>투자 일지</title>
+<script>
+  (function(){try{var t=localStorage.getItem('journal_theme');if(t!=='dark'&&t!=='light')t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  html, body { margin: 0; background: #F5F4F0; -webkit-text-size-adjust: 100%; }
+  :root { --bg: #F5F4F0; }
+  :root[data-theme="dark"] { --bg: #14161B; }
+  html, body { margin: 0; background: var(--bg); -webkit-text-size-adjust: 100%; }
   #root { min-height: 100vh; }
   /* 초기 로딩 표시 */
   #boot { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
@@ -45,7 +50,7 @@ import {
 import {
   Plus, ShoppingCart, Receipt, Coins, StickyNote,
   X, Edit3, Trash2, Check, ChevronRight, ChevronDown,
-  Pencil, Save, Target, Wallet, AlertTriangle, RefreshCw
+  Pencil, Save, Target, Wallet, AlertTriangle, RefreshCw, Sun, Moon
 } from 'lucide-react';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
@@ -130,6 +135,7 @@ const GOAL_KEY    = 'journal_goal_v1';
 const ACTUALS_KEY = 'journal_actuals_v1';
 const ASSETS_KEY  = 'journal_assets_v3';
 const SHARED = true;
+const PAGE_SIZE = 8; // 한 페이지에 보여줄 기록 수
 
 // 첨부 이미지 + 이전 손익 데이터 기준 초기값
 const DEFAULT_ASSETS = {
@@ -254,6 +260,15 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [filterType, setFilterType] = useState('all');
   const [filterAuthor, setFilterAuthor] = useState('all');
+  const [groupBy, setGroupBy] = useState('none'); // 'none' | 'month' | 'symbol'
+  const [page, setPage] = useState(1);            // 전체 보기 페이지
+  const [openGroups, setOpenGroups] = useState({}); // 월/종목 그룹 펼침 상태
+  const [groupPages, setGroupPages] = useState({}); // 그룹별 페이지
+  const [theme, setTheme] = useState(() => {
+    try { const t = localStorage.getItem('journal_theme'); if (t === 'dark' || t === 'light') return t; } catch (e) {}
+    try { if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark'; } catch (e) {}
+    return 'light';
+  });
   const [showGoalModal, setShowGoalModal] = useState(false);
 
   // Form state
@@ -670,57 +685,96 @@ function App() {
     });
   }, [sortedEntries, filterType, filterAuthor]);
 
+  // 필터·보기 방식이 바뀌면 페이지/펼침 상태 초기화
+  useEffect(() => {
+    setPage(1);
+    setOpenGroups({});
+    setGroupPages({});
+  }, [filterType, filterAuthor, groupBy]);
+
+  // 다크/라이트 테마 적용 + 저장
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', theme === 'dark' ? '#14161B' : '#F5F4F0');
+    try { localStorage.setItem('journal_theme', theme); } catch (e) {}
+  }, [theme]);
+
   if (!loaded) {
     return (
       <div className="min-h-screen flex items-center justify-center"
-           style={{ background: '#F5F4F0' }}>
-        <div className="text-sm" style={{ color: '#A39E94' }}>불러오는 중…</div>
+           style={{ background: 'var(--bg)' }}>
+        <div className="text-sm" style={{ color: 'var(--muted)' }}>불러오는 중…</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#F5F4F0', color: '#0A0A0A' }}>
+    <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--ink)' }}>
       <style>{`
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
         :root {
           --font: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
           --bg: #F5F4F0;
           --card: #FFFFFF;
+          --fill: #FAF9F5;
+          --fill-2: #EDE9DC;
+          --chip-bg: #EFEDE6;
           --border: #E8E6DF;
           --border-soft: #F0EDE2;
           --ink: #0A0A0A;
           --ink-2: #4A4A4A;
           --ink-3: #6B6B6B;
           --muted: #A39E94;
+          --muted-2: #8B8680;
+          --accent-solid: #0A0A0A;
+          --accent-on: #FFFFFF;
+          color-scheme: light;
+        }
+        :root[data-theme="dark"] {
+          --bg: #14161B;
+          --card: #2A2E36;
+          --fill: #20242B;
+          --fill-2: #23262D;
+          --chip-bg: #33373F;
+          --border: #353A44;
+          --border-soft: #2C313A;
+          --ink: #ECEDEF;
+          --ink-2: #C2C6CC;
+          --ink-3: #9CA2AA;
+          --muted: #777C86;
+          --muted-2: #8A8F99;
+          --accent-solid: #ECEDEF;
+          --accent-on: #14161B;
+          color-scheme: dark;
         }
         * { font-family: var(--font); -webkit-font-smoothing: antialiased; }
         .tabular { font-variant-numeric: tabular-nums; }
         .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
         .btn-primary {
-          background: #0A0A0A; color: #FFFFFF;
+          background: var(--accent-solid); color: var(--accent-on);
           padding: 15px 40px; border-radius: 999px;
           font-size: 15px; font-weight: 600;
           display: inline-flex; align-items: center; gap: 6px;
           transition: transform .12s ease, background .12s ease;
         }
-        .btn-primary:hover { background: #000; transform: translateY(-1px); }
+        .btn-primary:hover { background: var(--accent-solid); transform: translateY(-1px); }
         .btn-outline {
-          background: #FFFFFF; color: #0A0A0A;
+          background: var(--card); color: var(--ink);
           padding: 11px 22px; border-radius: 999px;
           font-size: 13px; font-weight: 500;
           border: 1px solid var(--border);
           display: inline-flex; align-items: center; gap: 6px;
           transition: all .12s ease;
         }
-        .btn-outline:hover { background: #FAF9F5; }
+        .btn-outline:hover { background: var(--fill); }
         .input {
           width: 100%; padding: 12px 14px;
           border: 1px solid var(--border); border-radius: 12px;
-          background: #FAF9F5; font-size: 15px; color: var(--ink);
+          background: var(--fill); font-size: 15px; color: var(--ink);
           transition: border-color .12s ease, background .12s ease;
         }
-        .input:focus { outline: none; border-color: var(--ink); background: #FFFFFF; }
+        .input:focus { outline: none; border-color: var(--ink); background: var(--card); }
         .label {
           display: block; font-size: 12px; font-weight: 500;
           color: var(--ink-3); margin-bottom: 7px;
@@ -741,7 +795,7 @@ function App() {
         @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
         .sym-wrap:hover .sym-x { opacity: 1; }
         .num-display { font-weight: 800; letter-spacing: -0.02em; }
-        .progress-bar { background: #EDE9DC; height: 8px; border-radius: 999px; overflow: hidden; }
+        .progress-bar { background: var(--fill-2); height: 8px; border-radius: 999px; overflow: hidden; }
         .progress-fill { height: 100%; border-radius: 999px;
           background: linear-gradient(90deg, #10A86F 0%, #43C28E 100%);
           transition: width .4s ease;
@@ -762,7 +816,19 @@ function App() {
         }
       `}</style>
 
-      <div className="max-w-2xl mx-auto px-5 py-9 sm:py-12">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-7 sm:py-12">
+
+        {/* Theme toggle */}
+        <div className="flex justify-end mb-1">
+          <button onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+                  aria-label="다크모드 전환" title="다크모드 전환"
+                  className="inline-flex items-center justify-center rounded-full transition-colors"
+                  style={{ width: 38, height: 38, background: 'var(--card)',
+                           border: '1px solid var(--border)', color: 'var(--ink-2)', cursor: 'pointer' }}>
+            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+        </div>
+
 
         {/* Hero header */}
         <header className="text-center mb-7 anim-in">
@@ -771,218 +837,8 @@ function App() {
             YURI & HYUNWOO <span style={{ color: '#D5CFC1' }}>·</span> 우리의 투자 일지
           </div>
 
-          {/* 투자 자산 카드 */}
-          <div className="asset-card text-left mx-auto mb-6" style={{ maxWidth: 460 }}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold" style={{ color: '#C9D2E0' }}>총 자산</span>
-                {assets.label ? (
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-md"
-                        style={{ background: 'rgba(255,255,255,0.08)', color: '#9AA7BC' }}>
-                    {assets.label}
-                  </span>
-                ) : assets.principal > 0 ? (
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-md"
-                        style={{ background: 'rgba(255,255,255,0.08)', color: '#9AA7BC' }}>
-                    입금원금 {formatKoreanWon(assets.principal)} 기준
-                  </span>
-                ) : null}
-              </div>
-              <button onClick={() => setShowAssetsModal(true)}
-                      className="p-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                <Pencil size={12} color="#9AA7BC" />
-              </button>
-            </div>
-
-            <div className="num-display tabular mb-3"
-                 style={{ color: '#FFFFFF', fontSize: 'clamp(28px, 7vw, 38px)' }}>
-              {formatKRW(assets.total)}<span style={{ fontSize: '0.5em', fontWeight: 700, marginLeft: 2 }}>원</span>
-            </div>
-
-            <div className="flex flex-col gap-1.5"
-                 style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 12 }}>
-              {assets.invested > 0 && (
-                <div className="flex items-center justify-between text-[13px]">
-                  <span style={{ color: '#9AA7BC' }}>투자 자산</span>
-                  <span className="tabular font-bold" style={{ color: '#E8EDF5' }}>
-                    {formatKRW(assets.invested)}원
-                  </span>
-                </div>
-              )}
-              {assetMetrics.sinceDepositPct != null && (
-                <div className="flex items-center justify-between text-[13px]">
-                  <span style={{ color: '#9AA7BC' }}>입금대비 손익</span>
-                  <span className="tabular font-bold"
-                        style={{ color: assetMetrics.sinceDeposit >= 0 ? '#FF6B6B' : '#5BC0EB' }}>
-                    {assetMetrics.sinceDeposit >= 0 ? '+' : ''}{formatKoreanWon(assetMetrics.sinceDeposit)}
-                    {' '}({assetMetrics.sinceDeposit >= 0 ? '+' : ''}{assetMetrics.sinceDepositPct.toFixed(2)}%)
-                  </span>
-                </div>
-              )}
-              {assetMetrics.sinceMonth != null && (
-                <div className="flex items-center justify-between text-[13px]">
-                  <span style={{ color: '#9AA7BC' }}>전월대비</span>
-                  <span className="tabular font-bold"
-                        style={{ color: assetMetrics.sinceMonth >= 0 ? '#FF6B6B' : '#5BC0EB' }}>
-                    {assetMetrics.sinceMonth >= 0 ? '+' : ''}{formatKoreanWon(assetMetrics.sinceMonth)}
-                    {' '}({assetMetrics.sinceMonth >= 0 ? '+' : ''}{assetMetrics.sinceMonthPct.toFixed(2)}%)
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {hasAnyGoal ? (
-            <>
-              {/* 목표 카드 3종 */}
-              <div className="grid gap-3 mx-auto mb-2" style={{ maxWidth: 460 }}>
-                <GoalProgress
-                  label="이번 달 목표" target={goals.monthly}
-                  actual={effActual.monthly} pct={achievement.monthly}
-                  manual={actuals.monthly != null}
-                  hue="#7C6FD9" subtitle="이번 달 실현 수익" />
-                <GoalProgress
-                  label="연간 목표" target={goals.annual}
-                  actual={effActual.annual} pct={achievement.annual}
-                  manual={actuals.annual != null}
-                  hue="#5CB3E8" subtitle="올해 실현 수익" />
-                <GoalProgress
-                  label="총 자산 목표" target={goals.total}
-                  actual={effActual.total} pct={achievement.total}
-                  manual={actuals.total != null}
-                  hue="#10A86F" subtitle="총 자산 목표 대비 현재 금액" />
-              </div>
-
-              <button onClick={() => setShowGoalModal(true)}
-                      className="mt-4 inline-flex items-center gap-1 text-xs"
-                      style={{ color: 'var(--ink-3)' }}>
-                <Pencil size={11}/> 목표 수정
-              </button>
-            </>
-          ) : (
-            <button onClick={() => setShowGoalModal(true)}
-                    className="goal-cta inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-sm font-semibold">
-              <Target size={14}/> 수익 목표 설정하기
-            </button>
-          )}
-
-          <div className="mt-5 flex items-center justify-center gap-2 flex-wrap">
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium"
-                 style={{ background: '#FAF9F5', color: '#6B6B6B', border: '1px solid #E8E6DF' }}>
-              <Pencil size={12} />
-              {stats.total > 0 ? `${stats.total}건 기록됨` : '작성 중'}
-            </div>
-            <button onClick={handleRefresh} disabled={refreshing}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-opacity"
-                    style={{ background: '#FFFFFF', color: '#6B6B6B', border: '1px solid #E8E6DF',
-                             opacity: refreshing ? 0.6 : 1, cursor: refreshing ? 'default' : 'pointer' }}
-                    title="상대방이 다른 기기에서 추가한 기록 불러오기">
-              <RefreshCw size={12} style={{ animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }} />
-              {refreshing ? '불러오는 중…' : '새로고침'}
-            </button>
-          </div>
-
-          <p className="mt-5 text-sm leading-relaxed" style={{ color: 'var(--ink-3)' }}>
-            매수·매도·배당을 함께 기록하며 목표를 향해 가요.<br/>
-            아래 칩을 눌러 빠르게 추가할 수 있어요.
-          </p>
         </header>
 
-        {/* Stats grid */}
-        <section className="mb-7 anim-in">
-          {(() => {
-            const md = statsScope === 'month'
-              ? (stats.byMonth[selectedMonth] || { buys: 0, sells: 0, dividends: 0, realized: 0 })
-              : null;
-            const buys = md ? md.buys : stats.totalBuys;
-            const sells = md ? md.sells : stats.totalSells;
-            const divs = md ? md.dividends : stats.totalDividends;
-            const realized = md ? md.realized : stats.realizedProfit;
-
-            // 월 이동
-            const shiftMonth = (delta) => {
-              const [y, mo] = selectedMonth.split('-').map(Number);
-              const d = new Date(y, mo - 1 + delta, 1);
-              setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
-            };
-            const monthLabel = `${selectedMonth.slice(0,4)}년 ${Number(selectedMonth.slice(5,7))}월`;
-
-            return (
-              <>
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  {statsScope === 'month' ? (
-                    <div className="inline-flex items-center gap-1">
-                      <button onClick={() => shiftMonth(-1)}
-                              className="p-1.5 rounded-lg hover:bg-stone-100" title="이전 달">
-                        <ChevronRight size={15} color="#6B6B6B" style={{ transform:'rotate(180deg)' }} />
-                      </button>
-                      <span className="text-sm font-bold tabular" style={{ color: 'var(--ink)', minWidth: 96, textAlign:'center' }}>
-                        {monthLabel}
-                      </span>
-                      <button onClick={() => shiftMonth(1)}
-                              className="p-1.5 rounded-lg hover:bg-stone-100" title="다음 달"
-                              disabled={selectedMonth >= stats.curMonth}
-                              style={{ opacity: selectedMonth >= stats.curMonth ? 0.3 : 1 }}>
-                        <ChevronRight size={15} color="#6B6B6B" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="text-xs" style={{ color: 'var(--ink-3)' }}>전체 기간</div>
-                  )}
-
-                  <div className="inline-flex p-0.5 rounded-full" style={{ background: '#EDE9DC' }}>
-                    {[['all','전체'],['month','월별']].map(([k, lbl]) => {
-                      const active = statsScope === k;
-                      return (
-                        <button key={k}
-                                onClick={() => {
-                                  setStatsScope(k);
-                                  if (k === 'month') setSelectedMonth(stats.curMonth);
-                                }}
-                                className="text-xs font-semibold px-3.5 py-1.5 rounded-full transition-all"
-                                style={{
-                                  background: active ? '#FFFFFF' : 'transparent',
-                                  color: active ? '#0A0A0A' : '#8B8680',
-                                  boxShadow: active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'
-                                }}>
-                          {lbl}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* 빠른 월 선택 (기록이 있는 달) */}
-                {statsScope === 'month' && stats.months.length > 1 && (
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {stats.months.slice().reverse().map(m => {
-                      const active = m === selectedMonth;
-                      return (
-                        <button key={m} onClick={() => setSelectedMonth(m)}
-                                className="text-xs font-medium px-2.5 py-1 rounded-full transition-all tabular"
-                                style={{
-                                  background: active ? '#0A0A0A' : '#FAF9F5',
-                                  color: active ? '#FFFFFF' : '#6B6B6B',
-                                  border: `1px solid ${active ? '#0A0A0A' : '#E8E6DF'}`
-                                }}>
-                          {m.slice(0,4)}.{m.slice(5,7)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <StatCard label="총 매수" value={buys} accent="#0B7048" />
-                  <StatCard label="총 매도" value={sells} accent="#A82828" />
-                  <StatCard label="총 배당" value={divs} accent="#9A640E" />
-                  <StatCard label="실현 수익" value={realized}
-                            accent={realized >= 0 ? '#0A0A0A' : '#A82828'} showSign />
-                </div>
-              </>
-            );
-          })()}
-        </section>
 
         {/* Quick add chips */}
         <section className="text-center mb-6 anim-in">
@@ -1007,49 +863,6 @@ function App() {
           </button>
         </div>
 
-        {/* Chart */}
-        {stats.cumSeries.length >= 2 && (
-          <section className="card p-5 sm:p-6 mb-5 anim-in">
-            <div className="mb-4">
-              <h2 className="text-[15px] font-bold">순 매수 추이</h2>
-              <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
-                전체 기간 · 누적 매수 − 매도
-              </p>
-            </div>
-            <div style={{ height: 220 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={stats.cumSeries} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
-                  <defs>
-                    <linearGradient id="valGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10A86F" stopOpacity={0.22}/>
-                      <stop offset="100%" stopColor="#10A86F" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#EDE9DC" strokeDasharray="2 4" vertical={false}/>
-                  <XAxis dataKey="date"
-                         tick={{ fontSize: 11, fill:'#A39E94' }}
-                         tickLine={false} axisLine={{ stroke:'#EDE9DC' }}
-                         tickFormatter={(d) => d.slice(5).replace('-', '/')}
-                         minTickGap={20} />
-                  <YAxis tick={{ fontSize: 11, fill:'#A39E94' }}
-                         tickLine={false} axisLine={false}
-                         tickFormatter={formatAxis} width={50} />
-                  <Tooltip contentStyle={{
-                            background:'#0A0A0A', border:'none', borderRadius:10,
-                            fontSize:12, color:'#FFFFFF', padding:'8px 12px'
-                          }}
-                          labelStyle={{ color:'#A39E94', marginBottom:4 }}
-                          formatter={(v) => [`₩${formatKRW(v)}`, '순 매수']} />
-                  <Area type="monotone" dataKey="value"
-                        stroke="#10A86F" strokeWidth={2.5}
-                        fill="url(#valGrad)"
-                        dot={{ r: 3, fill:'#10A86F', strokeWidth: 0 }}
-                        activeDot={{ r: 5, fill:'#10A86F' }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
-        )}
 
         {/* Entries */}
         <section className="card p-5 sm:p-6 mb-6 anim-in">
@@ -1077,6 +890,27 @@ function App() {
             ))}
           </div>
 
+          {/* 보기 방식: 전체 / 월별 / 종목별 */}
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xs flex-shrink-0" style={{ color: 'var(--ink-3)' }}>보기</span>
+            <div className="inline-flex p-0.5 rounded-full" style={{ background: 'var(--fill-2)' }}>
+              {[['none','전체'],['month','월별'],['symbol','종목별']].map(([k, lbl]) => {
+                const active = groupBy === k;
+                return (
+                  <button key={k} onClick={() => setGroupBy(k)}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-full transition-all"
+                          style={{
+                            background: active ? 'var(--card)' : 'transparent',
+                            color: active ? 'var(--ink)' : 'var(--muted-2)',
+                            boxShadow: active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'
+                          }}>
+                    {lbl}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {visibleEntries.length === 0 ? (
             <div className="text-center py-10">
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
@@ -1085,15 +919,99 @@ function App() {
                   : '조건에 맞는 기록이 없어요'}
               </p>
             </div>
+          ) : groupBy === 'none' ? (
+            (() => {
+              // 전체 보기 — 페이지 단위로 끊어서 표시
+              const totalPages = Math.max(1, Math.ceil(visibleEntries.length / PAGE_SIZE));
+              const cur = Math.min(page, totalPages);
+              const start = (cur - 1) * PAGE_SIZE;
+              const pageItems = visibleEntries.slice(start, start + PAGE_SIZE);
+              return (
+                <>
+                  <div className="flex flex-col">
+                    {pageItems.map((e, i) => (
+                      <EntryRow key={e.id} entry={e}
+                                onEdit={() => openEdit(e)}
+                                onDelete={() => removeEntry(e.id)}
+                                isLast={i === pageItems.length - 1} />
+                    ))}
+                  </div>
+                  <Pager page={cur} totalPages={totalPages} total={visibleEntries.length}
+                         onChange={setPage} />
+                </>
+              );
+            })()
           ) : (
-            <div className="flex flex-col">
-              {visibleEntries.map((e, i) => (
-                <EntryRow key={e.id} entry={e}
-                          onEdit={() => openEdit(e)}
-                          onDelete={() => removeEntry(e.id)}
-                          isLast={i === visibleEntries.length - 1} />
-              ))}
-            </div>
+            (() => {
+              // 월별 / 종목별 그룹화 (접고 펼치는 토글 + 그룹별 페이지)
+              const groups = {};
+              const order = [];
+              visibleEntries.forEach(e => {
+                let key, label;
+                if (groupBy === 'month') {
+                  const m = (e.date || '').slice(0, 7);
+                  key = m || '날짜 없음';
+                  label = m ? `${m.slice(0,4)}년 ${Number(m.slice(5,7))}월` : '날짜 없음';
+                } else {
+                  const s = e.symbol && e.symbol.trim();
+                  key = s || '메모';
+                  label = key;
+                }
+                if (!groups[key]) { groups[key] = { label, items: [] }; order.push(key); }
+                groups[key].items.push(e);
+              });
+              if (groupBy === 'month') {
+                order.sort((a, b) => b.localeCompare(a)); // 최신 월 먼저
+              } else {
+                order.sort((a, b) => groups[b].items.length - groups[a].items.length
+                                     || a.localeCompare(b)); // 기록 많은 종목 먼저
+              }
+              return (
+                <div className="flex flex-col">
+                  {order.map(key => {
+                    const g = groups[key];
+                    const open = !!openGroups[key];
+                    const totalPages = Math.max(1, Math.ceil(g.items.length / PAGE_SIZE));
+                    const cur = Math.min(groupPages[key] || 1, totalPages);
+                    const start = (cur - 1) * PAGE_SIZE;
+                    const pageItems = g.items.slice(start, start + PAGE_SIZE);
+                    return (
+                      <div key={key} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                        <button
+                          onClick={() => setOpenGroups(s => ({ ...s, [key]: !s[key] }))}
+                          className="w-full flex items-center gap-2 py-3.5 text-left"
+                          style={{ cursor: 'pointer' }}>
+                          {open
+                            ? <ChevronDown size={16} color="var(--muted-2)" />
+                            : <ChevronRight size={16} color="var(--muted-2)" />}
+                          <span className="text-[14px] font-bold" style={{ color: 'var(--ink)' }}>
+                            {g.label}
+                          </span>
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full"
+                                style={{ background: 'var(--chip-bg)', color: 'var(--muted-2)' }}>
+                            {g.items.length}건
+                          </span>
+                        </button>
+                        {open && (
+                          <div className="pb-3 pl-6">
+                            <div className="flex flex-col">
+                              {pageItems.map((e, i) => (
+                                <EntryRow key={e.id} entry={e}
+                                          onEdit={() => openEdit(e)}
+                                          onDelete={() => removeEntry(e.id)}
+                                          isLast={i === pageItems.length - 1} />
+                              ))}
+                            </div>
+                            <Pager page={cur} totalPages={totalPages} total={g.items.length}
+                                   onChange={(p) => setGroupPages(s => ({ ...s, [key]: p }))} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()
           )}
         </section>
 
@@ -1166,7 +1084,7 @@ function StatCard({ label, value, accent, showSign }) {
   const color = value === 0 ? '#C9C3B5' : accent;
   return (
     <div className="card p-4">
-      <div className="text-xs font-medium" style={{ color: '#A39E94' }}>{label}</div>
+      <div className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{label}</div>
       <div className="num-display tabular mt-2 leading-tight"
            style={{ color, fontSize: 'clamp(15px, 4vw, 18px)' }}>
         {value === 0 ? '0원' : (sign + formatKoreanWon(value))}
@@ -1181,13 +1099,39 @@ function FilterPill({ children, active, onClick, color }) {
       onClick={onClick}
       className="text-xs font-medium px-3 py-1.5 rounded-full transition-all"
       style={{
-        background: active ? '#0A0A0A' : 'transparent',
-        color: active ? '#FFFFFF' : (color || '#6B6B6B'),
-        border: `1px solid ${active ? '#0A0A0A' : '#E8E6DF'}`
+        background: active ? 'var(--accent-solid)' : 'transparent',
+        color: active ? 'var(--accent-on)' : (color || 'var(--ink-3)'),
+        border: `1px solid ${active ? 'var(--accent-solid)' : 'var(--border)'}`
       }}
     >
       {children}
     </button>
+  );
+}
+
+function Pager({ page, totalPages, total, onChange }) {
+  if (totalPages <= 1) return null;
+  const btn = (disabled) => ({
+    padding: 6, borderRadius: 8,
+    background: disabled ? 'transparent' : 'var(--fill)',
+    border: '1px solid var(--border)',
+    opacity: disabled ? 0.4 : 1,
+    cursor: disabled ? 'default' : 'pointer'
+  });
+  return (
+    <div className="flex items-center justify-center gap-3 mt-4">
+      <button onClick={() => onChange(page - 1)} disabled={page <= 1}
+              style={btn(page <= 1)} title="이전 페이지">
+        <ChevronRight size={15} color="var(--ink-3)" style={{ transform: 'rotate(180deg)' }} />
+      </button>
+      <span className="text-xs tabular" style={{ color: 'var(--ink-3)', minWidth: 64, textAlign: 'center' }}>
+        {page} / {totalPages}{total != null ? ` · ${total}건` : ''}
+      </span>
+      <button onClick={() => onChange(page + 1)} disabled={page >= totalPages}
+              style={btn(page >= totalPages)} title="다음 페이지">
+        <ChevronRight size={15} color="var(--ink-3)" />
+      </button>
+    </div>
   );
 }
 
@@ -1197,7 +1141,7 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
 
   return (
     <div className="group flex items-start gap-3 py-3.5"
-         style={{ borderBottom: isLast ? 'none' : '1px solid #F0EDE2' }}>
+         style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-soft)' }}>
       <div className="flex-shrink-0 w-1 rounded-full self-stretch"
            style={{ background: t.hue, minHeight: 36 }} />
 
@@ -1213,26 +1157,28 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
             {a.label}
           </span>
           {entry.symbol && (
-            <span className="text-sm font-semibold" style={{ color: '#0A0A0A' }}>
+            <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>
               {entry.symbol}
             </span>
           )}
-          <span className="text-xs ml-auto" style={{ color: '#A39E94' }}>
+          <span className="text-xs ml-auto" style={{ color: 'var(--muted)' }}>
             {formatRelative(entry.date)}
           </span>
         </div>
 
         {entry.amount != null && entry.type !== 'note' && (
-          <div className="num-display tabular text-[17px] mt-1 flex items-baseline gap-2" style={{ color: '#0A0A0A' }}>
+          <div className="num-display tabular text-[18px] mt-1.5 flex items-center flex-wrap gap-x-2 gap-y-1" style={{ color: 'var(--ink)' }}>
             <span>₩{formatKRW(entry.amount)}</span>
             {entry.shares > 0 && (
-              <span className="text-[13px] font-medium" style={{ color: '#A39E94' }}>
+              <span className="text-[12px] font-bold px-2 py-0.5 rounded-md"
+                    style={{ background: '#E1ECFC', color: '#2C68B8' }}>
                 {entry.shares}주
               </span>
             )}
             {entry.avg > 0 && (
-              <span className="text-[13px] font-medium" style={{ color: '#A39E94' }}>
-                · 평단 ₩{formatKRW(Math.round(entry.avg))}
+              <span className="text-[12px] font-bold px-2 py-0.5 rounded-md"
+                    style={{ background: '#EDE7FB', color: '#5B4FBE' }}>
+                평단 ₩{formatKRW(Math.round(entry.avg))}
               </span>
             )}
           </div>
@@ -1240,7 +1186,7 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
 
         {entry.note && (
           <div className="mt-1 text-sm leading-relaxed whitespace-pre-wrap"
-               style={{ color: '#4A4A4A' }}>
+               style={{ color: 'var(--ink-2)' }}>
             {entry.note}
           </div>
         )}
@@ -1248,7 +1194,7 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
 
       <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-stone-100" title="수정">
-          <Edit3 size={13} color="#8B8680" />
+          <Edit3 size={13} color="var(--muted-2)" />
         </button>
         <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-stone-100" title="삭제">
           <Trash2 size={13} color="#DC4848" />
@@ -1270,7 +1216,7 @@ function GoalProgress({ label, target, actual, pct, hue, subtitle, manual }) {
           <span className="text-[13px] font-semibold" style={{ color: 'var(--ink-2)' }}>{label}</span>
           {manual && (
             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-                  style={{ background: '#FAF9F5', color: '#A39E94', border: '1px solid #ECE9E0' }}>
+                  style={{ background: 'var(--fill)', color: 'var(--muted)', border: '1px solid #ECE9E0' }}>
               직접 입력
             </span>
           )}
@@ -1355,25 +1301,25 @@ function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose 
               <Target size={20} color="#E0483F"/> 목표 설정
             </h3>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
-              <X size={18} color="#6B6B6B"/>
+              <X size={18} color="var(--ink-3)"/>
             </button>
           </div>
 
-          <p className="text-sm mb-5 leading-relaxed" style={{ color: '#6B6B6B' }}>
+          <p className="text-sm mb-5 leading-relaxed" style={{ color: 'var(--ink-3)' }}>
             목표 금액과 현재 금액을 직접 입력할 수 있어요.<br/>
-            <span style={{ color: '#A39E94' }}>목표를 비우면 카드가 숨겨지고, 현재 금액을 비우면 기록에서 자동 계산돼요.</span>
+            <span style={{ color: 'var(--muted)' }}>목표를 비우면 카드가 숨겨지고, 현재 금액을 비우면 기록에서 자동 계산돼요.</span>
           </p>
 
           <div className="flex flex-col gap-6">
             {GOAL_FIELDS.map(f => (
-              <div key={f.key} className="p-4 rounded-xl" style={{ background:'#FAF9F5', border:'1px solid #F0EDE2' }}>
+              <div key={f.key} className="p-4 rounded-xl" style={{ background:'var(--fill)', border:'1px solid var(--border-soft)' }}>
                 <div className="label flex items-center gap-1.5 mb-3" style={{ marginBottom: 12 }}>
                   <span className="w-2 h-2 rounded-full" style={{ background: f.hue }} />
                   {f.label}
                 </div>
 
-                <label className="text-xs font-medium block mb-1.5" style={{ color:'#8B8680' }}>
-                  목표 금액 <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.desc}</span>
+                <label className="text-xs font-medium block mb-1.5" style={{ color:'var(--muted-2)' }}>
+                  목표 금액 <span style={{ color:'var(--muted)', fontWeight: 400 }}>· {f.desc}</span>
                 </label>
                 <input
                   className="input tabular text-lg num-display"
@@ -1388,8 +1334,8 @@ function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose 
                   </div>
                 )}
 
-                <label className="text-xs font-medium block mb-1.5 mt-3.5" style={{ color:'#8B8680' }}>
-                  현재 금액 <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.actLabel} (비우면 자동)</span>
+                <label className="text-xs font-medium block mb-1.5 mt-3.5" style={{ color:'var(--muted-2)' }}>
+                  현재 금액 <span style={{ color:'var(--muted)', fontWeight: 400 }}>· {f.actLabel} (비우면 자동)</span>
                 </label>
                 <input
                   className="input tabular text-lg num-display"
@@ -1398,7 +1344,7 @@ function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose 
                   value={f.actValue}
                   onChange={e => f.actSet(e.target.value)}
                 />
-                <div className="mt-1 text-xs tabular" style={{ color: '#A39E94' }}>
+                <div className="mt-1 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   {f.actValue.trim() !== ''
                     ? formatKoreanWon(parseNum(f.actValue))
                     : `자동 계산값 사용 · ${formatKoreanWon(f.auto)}`}
@@ -1469,7 +1415,7 @@ function FormModal({
               {editing ? '기록 수정' : '오늘의 기록'}
             </h3>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
-              <X size={18} color="#6B6B6B" />
+              <X size={18} color="var(--ink-3)" />
             </button>
           </div>
 
@@ -1483,9 +1429,9 @@ function FormModal({
                   <button key={k} onClick={() => setFType(k)}
                           className="py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-1.5"
                           style={{
-                            background: active ? v.bgChip : '#FAF9F5',
-                            color: active ? v.textChip : '#6B6B6B',
-                            border: `1px solid ${active ? v.hue + '55' : '#E8E6DF'}`
+                            background: active ? v.bgChip : 'var(--fill)',
+                            color: active ? v.textChip : 'var(--ink-3)',
+                            border: `1px solid ${active ? v.hue + '55' : 'var(--border)'}`
                           }}>
                     <span className="w-1.5 h-1.5 rounded-full" style={{ background: v.hue }} />
                     {v.label}
@@ -1527,7 +1473,7 @@ function FormModal({
           {allowSymbol && (
             <div className="mb-5">
               <label className="label">
-                종목 {!needsSymbol && <span style={{ color:'#A39E94' }}>(선택)</span>}
+                종목 {!needsSymbol && <span style={{ color:'var(--muted)' }}>(선택)</span>}
               </label>
 
               {/* Toggle header */}
@@ -1535,10 +1481,10 @@ function FormModal({
                       onClick={() => setSymOpen(o => !o)}
                       className="w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all"
                       style={{
-                        background: '#FAF9F5',
-                        border: `1px solid ${fSymbol ? ENTRY_TYPES[fType].hue + '55' : '#E8E6DF'}`,
+                        background: 'var(--fill)',
+                        border: `1px solid ${fSymbol ? ENTRY_TYPES[fType].hue + '55' : 'var(--border)'}`,
                       }}>
-                <span className="flex items-center gap-2 text-sm font-medium" style={{ color: fSymbol ? '#0A0A0A' : '#A39E94' }}>
+                <span className="flex items-center gap-2 text-sm font-medium" style={{ color: fSymbol ? 'var(--ink)' : 'var(--muted)' }}>
                   {fSymbol ? (
                     <>
                       <span className="w-2 h-2 rounded-full" style={{ background: ENTRY_TYPES[fType].hue }} />
@@ -1546,14 +1492,14 @@ function FormModal({
                     </>
                   ) : '종목 선택하기'}
                 </span>
-                <ChevronDown size={16} color="#8B8680"
+                <ChevronDown size={16} color="var(--muted-2)"
                              style={{ transform: symOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
               </button>
 
               {/* Checkbox list */}
               {symOpen && (
                 <div className="mt-2 rounded-xl overflow-hidden"
-                     style={{ border: '1px solid #E8E6DF' }}>
+                     style={{ border: '1px solid var(--border)' }}>
                   <div style={{ maxHeight: 240, overflowY: 'auto' }}>
                     {visibleSymbols.map((s, i) => {
                       const active = fSymbol === s;
@@ -1561,8 +1507,8 @@ function FormModal({
                       return (
                         <div key={s} className="sym-wrap flex items-center gap-2.5 px-3.5 py-2.5 transition-colors"
                              style={{
-                               background: active ? t.bgChip : '#FFFFFF',
-                               borderBottom: i === visibleSymbols.length - 1 ? 'none' : '1px solid #F0EDE2',
+                               background: active ? t.bgChip : 'var(--card)',
+                               borderBottom: i === visibleSymbols.length - 1 ? 'none' : '1px solid var(--border-soft)',
                                cursor: 'pointer'
                              }}
                              onClick={() => setFSymbol(active ? '' : s)}>
@@ -1570,14 +1516,14 @@ function FormModal({
                           <span className="flex items-center justify-center flex-shrink-0"
                                 style={{
                                   width: 20, height: 20, borderRadius: 6,
-                                  background: active ? t.hue : '#FFFFFF',
+                                  background: active ? t.hue : 'var(--card)',
                                   border: `1.5px solid ${active ? t.hue : '#CFC9BC'}`,
                                   transition: 'all .12s ease'
                                 }}>
                             {active && <Check size={13} color="#FFFFFF" strokeWidth={3} />}
                           </span>
                           <span className="flex-1 text-sm font-medium"
-                                style={{ color: active ? t.textChip : '#4A4A4A' }}>
+                                style={{ color: active ? t.textChip : 'var(--ink-2)' }}>
                             {s}
                           </span>
                           <button type="button"
@@ -1586,7 +1532,7 @@ function FormModal({
                                   className="sym-x flex items-center justify-center transition-opacity"
                                   style={{
                                     width: 22, height: 22, borderRadius: 9999,
-                                    opacity: 0.35, color: '#6B6B6B', background: 'transparent'
+                                    opacity: 0.35, color: 'var(--ink-3)', background: 'transparent'
                                   }}>
                             <X size={13} />
                           </button>
@@ -1596,7 +1542,7 @@ function FormModal({
                   </div>
 
                   {/* Add new row */}
-                  <div className="px-3.5 py-2.5" style={{ borderTop: '1px solid #F0EDE2', background: '#FAF9F5' }}>
+                  <div className="px-3.5 py-2.5" style={{ borderTop: '1px solid var(--border-soft)', background: 'var(--fill)' }}>
                     {adding ? (
                       <div className="flex items-center gap-1.5">
                         <input
@@ -1610,19 +1556,19 @@ function FormModal({
                           placeholder="종목명 입력"
                           className="text-sm rounded-lg flex-1"
                           style={{
-                            background:'#FFFFFF', border:'1px solid #0A0A0A',
-                            padding: '7px 12px', color:'#0A0A0A', outline:'none'
+                            background:'var(--card)', border:'1px solid var(--ink)',
+                            padding: '7px 12px', color:'var(--ink)', outline:'none'
                           }}
                         />
                         <button type="button" onClick={handleAddNew}
                                 className="flex items-center justify-center flex-shrink-0"
-                                style={{ background:'#0A0A0A', color:'#FFFFFF', width: 30, height: 30, borderRadius: 9999 }}>
+                                style={{ background:'var(--accent-solid)', color:'var(--accent-on)', width: 30, height: 30, borderRadius: 9999 }}>
                           <Check size={14} />
                         </button>
                         <button type="button"
                                 onClick={() => { setAdding(false); setNewSym(''); }}
                                 className="flex items-center justify-center flex-shrink-0"
-                                style={{ background:'transparent', color:'#8B8680', width: 30, height: 30, borderRadius: 9999, border:'1px solid #E8E6DF' }}>
+                                style={{ background:'transparent', color:'var(--muted-2)', width: 30, height: 30, borderRadius: 9999, border:'1px solid var(--border)' }}>
                           <X size={14} />
                         </button>
                       </div>
@@ -1630,7 +1576,7 @@ function FormModal({
                       <button type="button"
                               onClick={() => setAdding(true)}
                               className="w-full text-sm font-medium py-1.5 rounded-lg transition-all flex items-center justify-center gap-1"
-                              style={{ background: 'transparent', color: '#0A0A0A', border: '1px dashed #B5AC97' }}>
+                              style={{ background: 'transparent', color: 'var(--ink)', border: '1px dashed #B5AC97' }}>
                         <Plus size={13} /> 종목 추가
                       </button>
                     )}
@@ -1639,7 +1585,7 @@ function FormModal({
               )}
 
               {needsSymbol && !fSymbol && (
-                <div className="mt-2 text-xs" style={{ color: '#A39E94' }}>
+                <div className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
                   종목을 선택하거나 새로 추가해보세요
                 </div>
               )}
@@ -1660,7 +1606,7 @@ function FormModal({
                      value={fAmount}
                      onChange={e => setFAmount(e.target.value)} />
               {fAmount && parseNum(fAmount) > 0 && (
-                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   {formatKoreanWon(parseNum(fAmount))}
                 </div>
               )}
@@ -1671,7 +1617,7 @@ function FormModal({
           {allowShares && (
             <div className="mb-5">
               <label className="label">
-                수량 (주) <span style={{ color:'#A39E94' }}>(선택)</span>
+                수량 (주) <span style={{ color:'var(--muted)' }}>(선택)</span>
               </label>
               <input className="input tabular text-lg"
                      inputMode="decimal"
@@ -1679,7 +1625,7 @@ function FormModal({
                      value={fShares}
                      onChange={e => setFShares(e.target.value)} />
               {fShares && parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
-                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   {parseNum(fShares)}주 · 주당 약 {formatKoreanWon(parseNum(fAmount) / parseNum(fShares))}
                 </div>
               )}
@@ -1690,7 +1636,7 @@ function FormModal({
           {allowShares && (
             <div className="mb-5">
               <label className="label">
-                평단가 (₩/주) <span style={{ color:'#A39E94' }}>(선택)</span>
+                평단가 (₩/주) <span style={{ color:'var(--muted)' }}>(선택)</span>
               </label>
               <input className="input tabular text-lg"
                      inputMode="decimal"
@@ -1700,11 +1646,11 @@ function FormModal({
                      value={fAvg}
                      onChange={e => setFAvg(e.target.value)} />
               {fAvg && parseNum(fAvg) > 0 ? (
-                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   평단가 {formatKoreanWon(parseNum(fAvg))} / 주
                 </div>
               ) : (parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
-                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   비워두면 금액÷수량({formatKoreanWon(parseNum(fAmount) / parseNum(fShares))})으로 자동 저장돼요
                 </div>
               ))}
@@ -1714,7 +1660,7 @@ function FormModal({
           {/* Memo */}
           <div className="mb-6">
             <label className="label">
-              메모 {fType !== 'note' && <span style={{ color:'#A39E94' }}>(선택)</span>}
+              메모 {fType !== 'note' && <span style={{ color:'var(--muted)' }}>(선택)</span>}
             </label>
             <textarea className="input"
                       rows={3}
@@ -1763,7 +1709,7 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
                   style={{ width: 38, height: 38, borderRadius: 9999, background:'#FCE2E2' }}>
               <Trash2 size={17} color="#DC4848" />
             </span>
-            <p className="text-sm leading-relaxed whitespace-pre-line pt-1.5" style={{ color:'#4A4A4A' }}>
+            <p className="text-sm leading-relaxed whitespace-pre-line pt-1.5" style={{ color:'var(--ink-2)' }}>
               {message}
             </p>
           </div>
@@ -1825,19 +1771,19 @@ function AssetsModal({ current, onSave, onClose }) {
               <Wallet size={20} color="#10A86F"/> 자산 현황
             </h3>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
-              <X size={18} color="#6B6B6B"/>
+              <X size={18} color="var(--ink-3)"/>
             </button>
           </div>
 
-          <p className="text-sm mb-5 leading-relaxed" style={{ color: '#6B6B6B' }}>
+          <p className="text-sm mb-5 leading-relaxed" style={{ color: 'var(--ink-3)' }}>
             증권사 앱에 보이는 평가금액을 입력하면<br/>
-            <span style={{ color: '#A39E94' }}>입금대비·전월대비 손익이 자동으로 계산돼요.</span>
+            <span style={{ color: 'var(--muted)' }}>입금대비·전월대비 손익이 자동으로 계산돼요.</span>
           </p>
 
           <div className="flex flex-col gap-5">
             <div>
               <label className="label">
-                자산 구성 <span style={{ color:'#A39E94', fontWeight: 400 }}>· 카드에 표시될 설명 (선택)</span>
+                자산 구성 <span style={{ color:'var(--muted)', fontWeight: 400 }}>· 카드에 표시될 설명 (선택)</span>
               </label>
               <input
                 className="input"
@@ -1849,7 +1795,7 @@ function AssetsModal({ current, onSave, onClose }) {
             {FIELDS.map((f, i) => (
               <div key={i}>
                 <label className="label">
-                  {f.label} <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.desc}</span>
+                  {f.label} <span style={{ color:'var(--muted)', fontWeight: 400 }}>· {f.desc}</span>
                 </label>
                 <input
                   className="input tabular text-lg num-display"
@@ -1859,7 +1805,7 @@ function AssetsModal({ current, onSave, onClose }) {
                   onChange={e => f.set(e.target.value)}
                 />
                 {f.value && parseNum(f.value) > 0 && (
-                  <div className="mt-1.5 text-xs tabular" style={{ color: '#A39E94' }}>
+                  <div className="mt-1.5 text-xs tabular" style={{ color: 'var(--muted)' }}>
                     {formatKoreanWon(parseNum(f.value))}
                   </div>
                 )}
@@ -1868,10 +1814,10 @@ function AssetsModal({ current, onSave, onClose }) {
           </div>
 
           {(profitPct != null || monthPct != null) && (
-            <div className="mt-5 p-4 rounded-xl" style={{ background:'#FAF9F5', border:'1px solid #F0EDE2' }}>
+            <div className="mt-5 p-4 rounded-xl" style={{ background:'var(--fill)', border:'1px solid var(--border-soft)' }}>
               {profitPct != null && (
                 <div className="flex items-center justify-between text-sm mb-1.5">
-                  <span style={{ color:'#6B6B6B' }}>입금대비 손익</span>
+                  <span style={{ color:'var(--ink-3)' }}>입금대비 손익</span>
                   <span className="tabular font-bold" style={{ color: profit >= 0 ? '#E04A4A' : '#3D7FD6' }}>
                     {profit >= 0 ? '+' : ''}{formatKoreanWon(profit)} ({profit >= 0 ? '+' : ''}{profitPct.toFixed(2)}%)
                   </span>
@@ -1879,7 +1825,7 @@ function AssetsModal({ current, onSave, onClose }) {
               )}
               {monthPct != null && (
                 <div className="flex items-center justify-between text-sm">
-                  <span style={{ color:'#6B6B6B' }}>전월대비</span>
+                  <span style={{ color:'var(--ink-3)' }}>전월대비</span>
                   <span className="tabular font-bold" style={{ color: monthDiff >= 0 ? '#E04A4A' : '#3D7FD6' }}>
                     {monthDiff >= 0 ? '+' : ''}{formatKoreanWon(monthDiff)} ({monthDiff >= 0 ? '+' : ''}{monthPct.toFixed(2)}%)
                   </span>
@@ -1909,14 +1855,14 @@ function PasscodeGate({ children }) {
   const [err, setErr] = useState(false);
   if (ok) return children;
   return (
-    <div className="min-h-screen flex items-center justify-center px-4" style={{ background:'#F5F4F0' }}>
-      <div className="card p-7 w-full max-w-xs" style={{ background:'#fff', border:'1px solid #E8E6DF', borderRadius:16 }}>
+    <div className="min-h-screen flex items-center justify-center px-4" style={{ background:'var(--bg)' }}>
+      <div className="card p-7 w-full max-w-xs" style={{ background:'#fff', border:'1px solid var(--border)', borderRadius:16 }}>
         <h2 className="text-lg font-extrabold mb-1">투자 일지</h2>
-        <p className="text-sm mb-4" style={{ color:'#6B6B6B' }}>공유 암호를 입력하세요.</p>
+        <p className="text-sm mb-4" style={{ color:'var(--ink-3)' }}>공유 암호를 입력하세요.</p>
         <input className="input" type="password" value={v} autoFocus
                onKeyDown={e => { if (e.key === 'Enter') { if (v === APP_PASSCODE) setOk(true); else setErr(true); } }}
                onChange={e => { setV(e.target.value); setErr(false); }}
-               style={{ width:'100%', padding:'12px 14px', borderRadius:12, border:'1px solid #E8E6DF', fontSize:16 }} />
+               style={{ width:'100%', padding:'12px 14px', borderRadius:12, border:'1px solid var(--border)', fontSize:16 }} />
         {err && <div className="text-xs mt-2" style={{ color:'#A82828' }}>암호가 맞지 않아요.</div>}
         <button onClick={() => { if (v === APP_PASSCODE) setOk(true); else setErr(true); }}
                 className="btn-primary" style={{ marginTop:14, width:'100%', justifyContent:'center', padding:'12px' }}>
