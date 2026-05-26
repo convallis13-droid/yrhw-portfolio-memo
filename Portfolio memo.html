@@ -1,0 +1,1909 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#F5F4F0" />
+<title>투자 일지</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body { margin: 0; background: #F5F4F0; -webkit-text-size-adjust: 100%; }
+  #root { min-height: 100vh; }
+  /* 초기 로딩 표시 */
+  #boot { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+          display:flex; align-items:center; justify-content:center; min-height:100vh; color:#A39E94; }
+  .setup { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+           max-width: 560px; margin: 0 auto; padding: 40px 22px; color:#3a3a3a; line-height:1.7; }
+  .setup h1 { font-size: 22px; font-weight: 800; margin: 0 0 6px; }
+  .setup code { background:#EFEDE6; padding:2px 6px; border-radius:6px; font-size:13px; }
+  .setup pre { background:#1e1c17; color:#e8e4d8; padding:16px; border-radius:12px; overflow:auto; font-size:12.5px; }
+  .setup a { color:#0B7048; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react"
+  }
+}
+</script>
+</head>
+<body>
+<div id="root"><div id="boot">불러오는 중…</div></div>
+
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+} from 'recharts';
+import {
+  Plus, ShoppingCart, Receipt, Coins, StickyNote,
+  X, Edit3, Trash2, Check, ChevronRight, ChevronDown,
+  Pencil, Save, Target, Wallet, AlertTriangle, RefreshCw
+} from 'lucide-react';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  getFirestore, doc, setDoc, onSnapshot
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+/* =====================================================================
+   ① Firebase 설정 — 아래 값을 본인 프로젝트 값으로 바꿔주세요.
+   Firebase 콘솔 → 프로젝트 설정 → '내 앱'(웹) → SDK 설정 및 구성에서 복사.
+   ===================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyDypvrSr31PGm8RctuGspr1udEfgESGaSM",
+  authDomain: "yrhw-portfolio-memo.firebaseapp.com",
+  projectId: "yrhw-portfolio-memo",
+  storageBucket: "yrhw-portfolio-memo.firebasestorage.app",
+  messagingSenderId: "209056608890",
+  appId: "1:209056608890:web:3064d860d59151ef85c1c3",
+  measurementId: "G-NBWSHBJYY5"
+};
+
+/* (선택) 간단한 공유 암호. 비워두면 잠금 화면 없음.
+   주의: 가벼운 차단용일 뿐 강력한 보안은 아닙니다. */
+const APP_PASSCODE = "";
+
+/* ② 모든 기록이 저장될 Firestore 문서 (둘이 같은 문서를 공유) */
+const DOC_PATH = ["journal", "shared"];
+
+/* ---------------------------------------------------------------------
+   window.storage 호환 shim — 기존 앱 코드를 그대로 쓰기 위한 어댑터.
+   각 key를 Firestore 문서의 필드로 저장하고, onSnapshot으로 실시간 동기화.
+   --------------------------------------------------------------------- */
+const cfgMissing = !firebaseConfig.apiKey || /PASTE|YOUR_/.test(JSON.stringify(firebaseConfig));
+let docRef = null, cache = {}, firebaseError = null;
+let resolveFirst; const firstSnap = new Promise(r => { resolveFirst = r; });
+const listeners = new Set();
+
+if (!cfgMissing) {
+  try {
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    docRef = doc(db, DOC_PATH[0], DOC_PATH[1]);
+    onSnapshot(docRef, (snap) => {
+      cache = snap.exists() ? (snap.data() || {}) : {};
+      resolveFirst();
+      listeners.forEach(fn => { try { fn(); } catch (e) {} });
+    }, (err) => {
+      firebaseError = err; console.error('Firestore 오류:', err); resolveFirst();
+    });
+  } catch (e) {
+    firebaseError = e; console.error('Firebase 초기화 오류:', e); resolveFirst();
+  }
+} else {
+  resolveFirst();
+}
+
+window.storage = {
+  async get(key) {
+    await firstSnap;
+    const v = cache[key];
+    return (v === undefined || v === null) ? null : { value: v };
+  },
+  async set(key, value) {
+    cache[key] = value; // 낙관적 갱신
+    if (!docRef) return null;
+    try { await setDoc(docRef, { [key]: value }, { merge: true }); } catch (e) { console.error(e); }
+    return { value };
+  },
+  async delete(key) {
+    delete cache[key];
+    if (docRef) { try { await setDoc(docRef, { [key]: null }, { merge: true }); } catch (e) {} }
+    return { key, deleted: true };
+  },
+  onUpdate(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+};
+
+/* ===================== 앱 본문 (원본 거의 그대로) ===================== */
+// ===== Constants =====
+const STORAGE_KEY = 'journal_entries_v1';
+const SYMBOLS_KEY = 'journal_symbols_v4'; // bumped to refresh defaults
+const PREF_KEY    = 'journal_prefs_v1';
+const GOAL_KEY    = 'journal_goal_v1';
+const ACTUALS_KEY = 'journal_actuals_v1';
+const ASSETS_KEY  = 'journal_assets_v3';
+const SHARED = true;
+
+// 첨부 이미지 + 이전 손익 데이터 기준 초기값
+const DEFAULT_ASSETS = {
+  total: 150609066,     // 총 자산 (주식 + 비유동)
+  invested: 65209066,   // 투자 자산 (주식 계좌 평가금액)
+  principal: 61000000,  // 입금원금
+  prevMonth: 64489066,  // 전월 투자자산 → 전월대비 +72만(+1.12%)
+  label: '주식 + 비유동',
+};
+
+const ENTRY_TYPES = {
+  buy: {
+    label: '매수', Icon: ShoppingCart,
+    hue: '#10A86F', bgChip: '#DCF4E8', textChip: '#0B7048'
+  },
+  sell: {
+    label: '매도', Icon: Receipt,
+    hue: '#E04A4A', bgChip: '#FCE2E2', textChip: '#A82828'
+  },
+  dividend: {
+    label: '배당', Icon: Coins,
+    hue: '#EB9224', bgChip: '#FCEAD4', textChip: '#9A640E'
+  },
+  note: {
+    label: '메모', Icon: StickyNote,
+    hue: '#7C6FD9', bgChip: '#E8E4F8', textChip: '#5246A8'
+  },
+};
+
+const AUTHORS = {
+  yuri:    { label: '유리', color: '#EC4D8D', bgChip: '#FCE1EC', textChip: '#B82C68' },
+  hyunwoo: { label: '현우', color: '#4D8DEC', bgChip: '#E1ECFC', textChip: '#2C68B8' },
+};
+
+// 실제 보유 종목 (이미지 기반)
+const DEFAULT_SYMBOLS = [
+  '아이온큐',
+  '팔란티어 테크',
+  'ProShares Ultra QQQ',
+  'Schwab US Dividend Equity ETF',
+  'TIGER 미국나스닥100레버리지(합성)',
+  'KODEX 미국나스닥100',
+  'KODEX 미국배당커버드콜액티브',
+  'ACE KRX금현물',
+  '예수금',
+];
+
+// ===== Helpers =====
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
+const formatKRW = (n) => {
+  if (n == null || isNaN(n)) return '0';
+  return new Intl.NumberFormat('ko-KR').format(Math.round(n));
+};
+
+const formatKoreanWon = (n) => {
+  if (n == null || isNaN(n) || n === 0) return '0원';
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(Math.round(n));
+  if (abs >= 1e8) {
+    const eok = Math.floor(abs / 1e8);
+    const rest = abs % 1e8;
+    if (rest === 0) return `${sign}${eok}억원`;
+    const man = Math.floor(rest / 1e4);
+    if (man === 0) return `${sign}${eok}억 ${formatKRW(rest)}원`;
+    const wonRest = rest % 1e4;
+    if (wonRest === 0) return `${sign}${eok}억 ${formatKRW(man)}만원`;
+    return `${sign}${eok}억 ${formatKRW(man)}만 ${formatKRW(wonRest)}원`;
+  }
+  if (abs >= 1e4) {
+    const man = Math.floor(abs / 1e4);
+    const wonRest = abs % 1e4;
+    if (wonRest === 0) return `${sign}${formatKRW(man)}만원`;
+    return `${sign}${formatKRW(man)}만 ${formatKRW(wonRest)}원`;
+  }
+  return `${sign}${formatKRW(abs)}원`;
+};
+
+const formatAxis = (n) => {
+  const abs = Math.abs(n);
+  if (abs >= 1e8) return `${(n/1e8).toFixed(1)}억`;
+  if (abs >= 1e4) return `${Math.round(n/1e4)}만`;
+  return String(n);
+};
+
+const formatRelative = (dateStr) => {
+  const d = new Date(dateStr);
+  const t = new Date(todayStr());
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 0) return '오늘';
+  if (diff === 1) return '어제';
+  if (diff > 1 && diff < 7) return `${diff}일 전`;
+  return dateStr.slice(5).replace('-', '. ');
+};
+
+const parseNum = (s) => {
+  if (typeof s !== 'string') return 0;
+  const cleaned = s.replace(/[^\d.-]/g, '');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
+};
+
+// ===== Main App =====
+function App() {
+  const [entries, setEntries] = useState([]);
+  const [symbols, setSymbols] = useState(DEFAULT_SYMBOLS);
+  const [goals, setGoals] = useState({ monthly: 0, annual: 0, total: 0 });
+  // 직접 입력한 '현재 금액' (null이면 자동계산값 사용)
+  const [actuals, setActuals] = useState({ monthly: null, annual: null, total: null });
+  const [assets, setAssets] = useState(DEFAULT_ASSETS);
+  const [showAssetsModal, setShowAssetsModal] = useState(false);
+  const [confirmState, setConfirmState] = useState(null); // { message, onConfirm }
+  const [formError, setFormError] = useState('');
+  const [statsScope, setStatsScope] = useState('all'); // 'all' | 'month'
+  const [selectedMonth, setSelectedMonth] = useState(() => todayStr().slice(0, 7)); // YYYY-MM
+  const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [filterType, setFilterType] = useState('all');
+  const [filterAuthor, setFilterAuthor] = useState('all');
+  const [showGoalModal, setShowGoalModal] = useState(false);
+
+  // Form state
+  const [fType, setFType] = useState('buy');
+  const [fAuthor, setFAuthor] = useState('yuri');
+  const [fDate, setFDate] = useState(todayStr());
+  const [fAmount, setFAmount] = useState('');
+  const [fShares, setFShares] = useState('');
+  const [fSymbol, setFSymbol] = useState('');
+  const [fNote, setFNote] = useState('');
+
+  // Load shared records (entries/symbols/goals/actuals/assets) — reusable for manual refresh
+  const loadShared = async () => {
+      // Entries (with author migration: wife→yuri, husband→hyunwoo)
+      try {
+        const res = await window.storage.get(STORAGE_KEY, SHARED);
+        if (res?.value) {
+          const parsed = JSON.parse(res.value);
+          if (Array.isArray(parsed)) {
+            const migrated = parsed.map(e => ({
+              ...e,
+              author: e.author === 'wife' ? 'yuri'
+                    : e.author === 'husband' ? 'hyunwoo'
+                    : e.author
+            }));
+            setEntries(migrated);
+            const changed = migrated.some((m, i) => m.author !== parsed[i].author);
+            if (changed) {
+              try { await window.storage.set(STORAGE_KEY, JSON.stringify(migrated), SHARED); } catch {}
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Symbols v2
+      try {
+        const sym = await window.storage.get(SYMBOLS_KEY, SHARED);
+        if (sym?.value) {
+          const parsed = JSON.parse(sym.value);
+          if (Array.isArray(parsed) && parsed.length) setSymbols(parsed);
+        } else {
+          try { await window.storage.set(SYMBOLS_KEY, JSON.stringify(DEFAULT_SYMBOLS), SHARED); } catch {}
+        }
+      } catch (e) {
+        try { await window.storage.set(SYMBOLS_KEY, JSON.stringify(DEFAULT_SYMBOLS), SHARED); } catch {}
+      }
+
+      // Goal (with migration: legacy { amount } → { annual })
+      try {
+        const g = await window.storage.get(GOAL_KEY, SHARED);
+        if (g?.value) {
+          const parsed = JSON.parse(g.value);
+          if (parsed && typeof parsed === 'object') {
+            if (typeof parsed.amount === 'number') {
+              // legacy single-goal format
+              const migrated = { monthly: 0, annual: parsed.amount, total: 0 };
+              setGoals(migrated);
+              try { await window.storage.set(GOAL_KEY, JSON.stringify(migrated), SHARED); } catch {}
+            } else {
+              setGoals({
+                monthly: Number(parsed.monthly) || 0,
+                annual: Number(parsed.annual) || 0,
+                total: Number(parsed.total) || 0,
+              });
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Actuals (직접 입력한 현재 금액 · null이면 자동계산 사용)
+      try {
+        const ac = await window.storage.get(ACTUALS_KEY, SHARED);
+        if (ac?.value) {
+          const parsed = JSON.parse(ac.value);
+          if (parsed && typeof parsed === 'object') {
+            const norm = (v) => (typeof v === 'number' && !isNaN(v)) ? v : null;
+            setActuals({
+              monthly: norm(parsed.monthly),
+              annual: norm(parsed.annual),
+              total: norm(parsed.total),
+            });
+          }
+        }
+      } catch (e) {}
+
+      // Assets (default to attached-image values on first run)
+      try {
+        const av = await window.storage.get(ASSETS_KEY, SHARED);
+        if (av?.value) {
+          const parsed = JSON.parse(av.value);
+          if (parsed && typeof parsed === 'object') {
+            setAssets({
+              total: Number(parsed.total) || 0,
+              invested: Number(parsed.invested) || 0,
+              principal: Number(parsed.principal) || 0,
+              prevMonth: Number(parsed.prevMonth) || 0,
+              label: typeof parsed.label === 'string' ? parsed.label : '',
+            });
+          }
+        } else {
+          try { await window.storage.set(ASSETS_KEY, JSON.stringify(DEFAULT_ASSETS), SHARED); } catch {}
+        }
+      } catch (e) {
+        try { await window.storage.set(ASSETS_KEY, JSON.stringify(DEFAULT_ASSETS), SHARED); } catch {}
+      }
+  };
+
+  // Load
+  useEffect(() => {
+    (async () => {
+      await loadShared();
+
+      // Pref (form author) — first load only
+      try {
+        const pref = await window.storage.get(PREF_KEY, SHARED);
+        if (pref?.value) {
+          const p = JSON.parse(pref.value);
+          if (p.lastAuthor) {
+            const a = p.lastAuthor === 'wife' ? 'yuri'
+                    : p.lastAuthor === 'husband' ? 'hyunwoo'
+                    : p.lastAuthor;
+            if (AUTHORS[a]) setFAuthor(a);
+          }
+        }
+      } catch (e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  // 실시간 동기화: 상대방이 다른 기기에서 저장하면 자동으로 다시 불러옴 (Firestore onSnapshot)
+  useEffect(() => {
+    if (!window.storage || !window.storage.onUpdate) return;
+    const unsub = window.storage.onUpdate(() => { loadShared(); });
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, []);
+
+  // 수동 새로고침 (보조용)
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try { await loadShared(); } catch (e) {} finally { setRefreshing(false); }
+  };
+
+  const persist = async (next) => {
+    setEntries(next);
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), SHARED); }
+    catch (e) { console.error(e); }
+  };
+
+  const persistSymbols = async (next) => {
+    setSymbols(next);
+    try { await window.storage.set(SYMBOLS_KEY, JSON.stringify(next), SHARED); }
+    catch (e) { console.error(e); }
+  };
+
+  const persistPref = async (author) => {
+    try { await window.storage.set(PREF_KEY, JSON.stringify({ lastAuthor: author }), SHARED); }
+    catch (e) {}
+  };
+
+  const persistGoals = async (next) => {
+    setGoals(next);
+    try { await window.storage.set(GOAL_KEY, JSON.stringify(next), SHARED); }
+    catch (e) { console.error(e); }
+  };
+
+  const persistActuals = async (next) => {
+    setActuals(next);
+    try { await window.storage.set(ACTUALS_KEY, JSON.stringify(next), SHARED); }
+    catch (e) { console.error(e); }
+  };
+
+  const persistAssets = async (next) => {
+    setAssets(next);
+    try { await window.storage.set(ASSETS_KEY, JSON.stringify(next), SHARED); }
+    catch (e) { console.error(e); }
+  };
+
+  // 아티팩트 iframe에서 window.confirm이 막혀서 커스텀 확인 모달 사용
+  const askConfirm = (message, onConfirm) => setConfirmState({ message, onConfirm });
+
+  const addSymbol = (s) => {
+    const trimmed = s.trim();
+    if (!trimmed) return false;
+    if (symbols.includes(trimmed)) return true;
+    persistSymbols([...symbols, trimmed]);
+    return true;
+  };
+
+  const removeSymbol = (s) => {
+    askConfirm(`'${s}'을(를) 종목 목록에서 삭제할까요?\n(이전 기록은 그대로 남아있어요)`, () => {
+      persistSymbols(symbols.filter(x => x !== s));
+      if (fSymbol === s) setFSymbol('');
+    });
+  };
+
+  // Filter out any legacy entry types
+  const validEntries = useMemo(
+    () => entries.filter(e => ENTRY_TYPES[e.type] && AUTHORS[e.author]),
+    [entries]
+  );
+
+  // Stats (all-time)
+  const stats = useMemo(() => {
+    let totalBuys = 0, totalSells = 0, totalDividends = 0;
+    let countBuy = 0, countSell = 0, countDiv = 0, countNote = 0;
+    const dailyNet = {};
+
+    const today = todayStr();
+    const curMonth = today.slice(0, 7); // YYYY-MM
+    const curYear = today.slice(0, 4);  // YYYY
+    let realizedMonth = 0, realizedYear = 0;
+    let buysMonth = 0, sellsMonth = 0, dividendsMonth = 0;
+    const byMonth = {}; // { 'YYYY-MM': { buys, sells, dividends, realized } }
+
+    const bucket = (m) => {
+      if (!byMonth[m]) byMonth[m] = { buys: 0, sells: 0, dividends: 0, realized: 0 };
+      return byMonth[m];
+    };
+
+    validEntries.forEach(e => {
+      const amt = e.amount || 0;
+      const m = e.date ? e.date.slice(0, 7) : null;
+      const inMonth = m === curMonth;
+      // realized contribution to profit (sell + dividend − buy)
+      let contrib = 0;
+      if (e.type === 'buy') {
+        totalBuys += amt; countBuy++;
+        dailyNet[e.date] = (dailyNet[e.date] || 0) + amt;
+        contrib = -amt;
+        if (inMonth) buysMonth += amt;
+        if (m) bucket(m).buys += amt;
+      } else if (e.type === 'sell') {
+        totalSells += amt; countSell++;
+        dailyNet[e.date] = (dailyNet[e.date] || 0) - amt;
+        contrib = amt;
+        if (inMonth) sellsMonth += amt;
+        if (m) bucket(m).sells += amt;
+      } else if (e.type === 'dividend') {
+        totalDividends += amt; countDiv++;
+        contrib = amt;
+        if (inMonth) dividendsMonth += amt;
+        if (m) bucket(m).dividends += amt;
+      } else if (e.type === 'note') {
+        countNote++;
+      }
+      if (m) bucket(m).realized += contrib;
+      if (inMonth) realizedMonth += contrib;
+      if (e.date && e.date.slice(0, 4) === curYear) realizedYear += contrib;
+    });
+
+    const months = Object.keys(byMonth).sort(); // 오름차순
+
+    const sortedDates = Object.keys(dailyNet).sort();
+    let cum = 0;
+    const cumSeries = sortedDates.map(d => {
+      cum += dailyNet[d];
+      return { date: d, value: cum };
+    });
+
+    const netInvested = totalBuys - totalSells;
+    // 실현 수익 = 매도 + 배당 - 매수
+    const realizedProfit = totalSells + totalDividends - totalBuys;
+    // 수익률 = 실현 수익 / 총 매수 (투자 원금 대비)
+    const returnRate = totalBuys > 0 ? (realizedProfit / totalBuys) * 100 : null;
+
+    return {
+      totalBuys, totalSells, totalDividends,
+      buysMonth, sellsMonth, dividendsMonth,
+      netInvested, realizedProfit, returnRate,
+      realizedMonth, realizedYear,
+      curMonth, byMonth, months,
+      countBuy, countSell, countDiv, countNote,
+      cumSeries,
+      total: validEntries.length,
+    };
+  }, [validEntries]);
+
+  // Achievement % per goal type
+  // 유효 현재값: 직접 입력값(override)이 있으면 사용, 없으면 자동계산값
+  const effActual = useMemo(() => ({
+    monthly: actuals.monthly != null ? actuals.monthly : stats.realizedMonth,
+    annual:  actuals.annual  != null ? actuals.annual  : stats.realizedYear,
+    total:   actuals.total   != null ? actuals.total   : assets.total,
+  }), [actuals, stats.realizedMonth, stats.realizedYear, assets.total]);
+
+  const achievement = useMemo(() => {
+    const pct = (actual, target) => {
+      if (!target || target <= 0) return null;
+      return Math.max(0, (actual / target) * 100);
+    };
+    return {
+      monthly: pct(effActual.monthly, goals.monthly),
+      annual: pct(effActual.annual, goals.annual),
+      total: pct(effActual.total, goals.total),
+    };
+  }, [goals, effActual]);
+
+  const hasAnyGoal = goals.monthly > 0 || goals.annual > 0 || goals.total > 0;
+
+  // 자산 현황 지표 (투자자산 기준 입금대비/전월대비)
+  const assetMetrics = useMemo(() => {
+    const { invested, principal, prevMonth } = assets;
+    const base = invested > 0 ? invested : 0;
+    const sinceDeposit = principal > 0 ? base - principal : null;
+    const sinceDepositPct = principal > 0 ? (sinceDeposit / principal) * 100 : null;
+    const sinceMonth = prevMonth > 0 ? base - prevMonth : null;
+    const sinceMonthPct = prevMonth > 0 ? (sinceMonth / prevMonth) * 100 : null;
+    return { sinceDeposit, sinceDepositPct, sinceMonth, sinceMonthPct };
+  }, [assets]);
+
+  const resetForm = () => {
+    setFType('buy');
+    setFDate(todayStr());
+    setFAmount(''); setFShares(''); setFSymbol(''); setFNote('');
+    setFormError('');
+    setEditingId(null);
+  };
+
+  const openAdd = () => { resetForm(); setShowForm(true); };
+
+  const openAddWithType = (type) => {
+    resetForm();
+    setFType(type);
+    setShowForm(true);
+  };
+
+  const openEdit = (e) => {
+    setEditingId(e.id);
+    setFType(e.type);
+    setFAuthor(e.author);
+    setFDate(e.date);
+    setFAmount(e.amount ? String(e.amount) : '');
+    setFShares(e.shares ? String(e.shares) : '');
+    setFSymbol(e.symbol || '');
+    setFNote(e.note || '');
+    setShowForm(true);
+  };
+
+  const submit = async () => {
+    const amt = parseNum(fAmount);
+
+    if (fType === 'buy' || fType === 'sell') {
+      if (!fSymbol.trim()) { setFormError('종목을 선택해주세요'); return; }
+      if (amt <= 0) { setFormError('금액을 입력해주세요'); return; }
+    } else if (fType === 'dividend') {
+      if (amt <= 0) { setFormError('배당 금액을 입력해주세요'); return; }
+    } else if (fType === 'note') {
+      if (!fNote.trim()) { setFormError('메모 내용을 입력해주세요'); return; }
+    }
+    setFormError('');
+
+    const base = {
+      id: editingId || `e_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+      type: fType, author: fAuthor, date: fDate,
+      createdAt: editingId ? (entries.find(x => x.id === editingId)?.createdAt || Date.now()) : Date.now(),
+      updatedAt: Date.now(),
+      note: fNote.trim() || undefined,
+    };
+
+    // 종목: 모든 유형에서 선택 가능(메모 포함)
+    if (fSymbol.trim()) base.symbol = fSymbol.trim();
+
+    if (fType === 'buy' || fType === 'sell' || fType === 'dividend') {
+      base.amount = amt;
+    }
+
+    // 주식 수: 매수/매도에만
+    if (fType === 'buy' || fType === 'sell') {
+      const sh = parseNum(fShares);
+      if (sh > 0) base.shares = sh;
+    }
+
+    const next = editingId
+      ? entries.map(e => e.id === editingId ? base : e)
+      : [...entries, base];
+
+    await persist(next);
+    await persistPref(fAuthor);
+    setShowForm(false);
+    resetForm();
+  };
+
+  const removeEntry = (id) => {
+    askConfirm('정말 삭제할까요?', () => {
+      persist(entries.filter(e => e.id !== id));
+    });
+  };
+
+  const sortedEntries = useMemo(() => {
+    return [...validEntries].sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+  }, [validEntries]);
+
+  const visibleEntries = useMemo(() => {
+    return sortedEntries.filter(e => {
+      if (filterType !== 'all' && e.type !== filterType) return false;
+      if (filterAuthor !== 'all' && e.author !== filterAuthor) return false;
+      return true;
+    });
+  }, [sortedEntries, filterType, filterAuthor]);
+
+  if (!loaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center"
+           style={{ background: '#F5F4F0' }}>
+        <div className="text-sm" style={{ color: '#A39E94' }}>불러오는 중…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen" style={{ background: '#F5F4F0', color: '#0A0A0A' }}>
+      <style>{`
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+        :root {
+          --font: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+          --bg: #F5F4F0;
+          --card: #FFFFFF;
+          --border: #E8E6DF;
+          --border-soft: #F0EDE2;
+          --ink: #0A0A0A;
+          --ink-2: #4A4A4A;
+          --ink-3: #6B6B6B;
+          --muted: #A39E94;
+        }
+        * { font-family: var(--font); -webkit-font-smoothing: antialiased; }
+        .tabular { font-variant-numeric: tabular-nums; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
+        .btn-primary {
+          background: #0A0A0A; color: #FFFFFF;
+          padding: 15px 40px; border-radius: 999px;
+          font-size: 15px; font-weight: 600;
+          display: inline-flex; align-items: center; gap: 6px;
+          transition: transform .12s ease, background .12s ease;
+        }
+        .btn-primary:hover { background: #000; transform: translateY(-1px); }
+        .btn-outline {
+          background: #FFFFFF; color: #0A0A0A;
+          padding: 11px 22px; border-radius: 999px;
+          font-size: 13px; font-weight: 500;
+          border: 1px solid var(--border);
+          display: inline-flex; align-items: center; gap: 6px;
+          transition: all .12s ease;
+        }
+        .btn-outline:hover { background: #FAF9F5; }
+        .input {
+          width: 100%; padding: 12px 14px;
+          border: 1px solid var(--border); border-radius: 12px;
+          background: #FAF9F5; font-size: 15px; color: var(--ink);
+          transition: border-color .12s ease, background .12s ease;
+        }
+        .input:focus { outline: none; border-color: var(--ink); background: #FFFFFF; }
+        .label {
+          display: block; font-size: 12px; font-weight: 500;
+          color: var(--ink-3); margin-bottom: 7px;
+        }
+        .quick-chip {
+          display: inline-flex; align-items: center; gap: 7px;
+          padding: 8px 14px; border-radius: 999px;
+          font-size: 13.5px; font-weight: 500;
+          transition: all .12s ease;
+        }
+        .quick-chip:hover { transform: translateY(-1px); }
+        .modal-back { animation: bgIn .2s ease both; }
+        @keyframes bgIn { from { opacity:0;} to {opacity:1;} }
+        .modal-card { animation: modalIn .25s cubic-bezier(.2,.7,.2,1) both; }
+        @keyframes modalIn { from { opacity:0; transform: translateY(12px) scale(.99);} to {opacity:1; transform:none;} }
+        .anim-in { animation: fadeUp .35s cubic-bezier(.2,.7,.2,1) both; }
+        @keyframes fadeUp { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform: translateY(0);} }
+        @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+        .sym-wrap:hover .sym-x { opacity: 1; }
+        .num-display { font-weight: 800; letter-spacing: -0.02em; }
+        .progress-bar { background: #EDE9DC; height: 8px; border-radius: 999px; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 999px;
+          background: linear-gradient(90deg, #10A86F 0%, #43C28E 100%);
+          transition: width .4s ease;
+        }
+        .goal-cta {
+          background: linear-gradient(135deg, #E63950 0%, #E0483F 100%);
+          color: #FFFFFF;
+          box-shadow: 0 6px 16px rgba(224,72,63,0.32);
+          transition: transform .12s ease, box-shadow .12s ease;
+        }
+        .goal-cta:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(224,72,63,0.42); }
+        .asset-card {
+          background: linear-gradient(155deg, #1B2433 0%, #141A26 100%);
+          border: 1px solid #2A3445;
+          border-radius: 18px;
+          padding: 20px 22px;
+          box-shadow: 0 10px 30px rgba(20,26,38,0.25);
+        }
+      `}</style>
+
+      <div className="max-w-2xl mx-auto px-5 py-9 sm:py-12">
+
+        {/* Hero header */}
+        <header className="text-center mb-7 anim-in">
+          <div className="text-[11px] tracking-[0.18em] font-medium mb-5"
+               style={{ color: 'var(--muted)' }}>
+            YURI & HYUNWOO <span style={{ color: '#D5CFC1' }}>·</span> 우리의 투자 일지
+          </div>
+
+          {/* 투자 자산 카드 */}
+          <div className="asset-card text-left mx-auto mb-6" style={{ maxWidth: 460 }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-semibold" style={{ color: '#C9D2E0' }}>총 자산</span>
+                {assets.label ? (
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-md"
+                        style={{ background: 'rgba(255,255,255,0.08)', color: '#9AA7BC' }}>
+                    {assets.label}
+                  </span>
+                ) : assets.principal > 0 ? (
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-md"
+                        style={{ background: 'rgba(255,255,255,0.08)', color: '#9AA7BC' }}>
+                    입금원금 {formatKoreanWon(assets.principal)} 기준
+                  </span>
+                ) : null}
+              </div>
+              <button onClick={() => setShowAssetsModal(true)}
+                      className="p-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                <Pencil size={12} color="#9AA7BC" />
+              </button>
+            </div>
+
+            <div className="num-display tabular mb-3"
+                 style={{ color: '#FFFFFF', fontSize: 'clamp(28px, 7vw, 38px)' }}>
+              {formatKRW(assets.total)}<span style={{ fontSize: '0.5em', fontWeight: 700, marginLeft: 2 }}>원</span>
+            </div>
+
+            <div className="flex flex-col gap-1.5"
+                 style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 12 }}>
+              {assets.invested > 0 && (
+                <div className="flex items-center justify-between text-[13px]">
+                  <span style={{ color: '#9AA7BC' }}>투자 자산</span>
+                  <span className="tabular font-bold" style={{ color: '#E8EDF5' }}>
+                    {formatKRW(assets.invested)}원
+                  </span>
+                </div>
+              )}
+              {assetMetrics.sinceDepositPct != null && (
+                <div className="flex items-center justify-between text-[13px]">
+                  <span style={{ color: '#9AA7BC' }}>입금대비 손익</span>
+                  <span className="tabular font-bold"
+                        style={{ color: assetMetrics.sinceDeposit >= 0 ? '#FF6B6B' : '#5BC0EB' }}>
+                    {assetMetrics.sinceDeposit >= 0 ? '+' : ''}{formatKoreanWon(assetMetrics.sinceDeposit)}
+                    {' '}({assetMetrics.sinceDeposit >= 0 ? '+' : ''}{assetMetrics.sinceDepositPct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
+              {assetMetrics.sinceMonth != null && (
+                <div className="flex items-center justify-between text-[13px]">
+                  <span style={{ color: '#9AA7BC' }}>전월대비</span>
+                  <span className="tabular font-bold"
+                        style={{ color: assetMetrics.sinceMonth >= 0 ? '#FF6B6B' : '#5BC0EB' }}>
+                    {assetMetrics.sinceMonth >= 0 ? '+' : ''}{formatKoreanWon(assetMetrics.sinceMonth)}
+                    {' '}({assetMetrics.sinceMonth >= 0 ? '+' : ''}{assetMetrics.sinceMonthPct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {hasAnyGoal ? (
+            <>
+              {/* 목표 카드 3종 */}
+              <div className="grid gap-3 mx-auto mb-2" style={{ maxWidth: 460 }}>
+                <GoalProgress
+                  label="이번 달 목표" target={goals.monthly}
+                  actual={effActual.monthly} pct={achievement.monthly}
+                  manual={actuals.monthly != null}
+                  hue="#7C6FD9" subtitle="이번 달 실현 수익" />
+                <GoalProgress
+                  label="연간 목표" target={goals.annual}
+                  actual={effActual.annual} pct={achievement.annual}
+                  manual={actuals.annual != null}
+                  hue="#5CB3E8" subtitle="올해 실현 수익" />
+                <GoalProgress
+                  label="총 자산 목표" target={goals.total}
+                  actual={effActual.total} pct={achievement.total}
+                  manual={actuals.total != null}
+                  hue="#10A86F" subtitle="총 자산 목표 대비 현재 금액" />
+              </div>
+
+              <button onClick={() => setShowGoalModal(true)}
+                      className="mt-4 inline-flex items-center gap-1 text-xs"
+                      style={{ color: 'var(--ink-3)' }}>
+                <Pencil size={11}/> 목표 수정
+              </button>
+            </>
+          ) : (
+            <button onClick={() => setShowGoalModal(true)}
+                    className="goal-cta inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-sm font-semibold">
+              <Target size={14}/> 수익 목표 설정하기
+            </button>
+          )}
+
+          <div className="mt-5 flex items-center justify-center gap-2 flex-wrap">
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium"
+                 style={{ background: '#FAF9F5', color: '#6B6B6B', border: '1px solid #E8E6DF' }}>
+              <Pencil size={12} />
+              {stats.total > 0 ? `${stats.total}건 기록됨` : '작성 중'}
+            </div>
+            <button onClick={handleRefresh} disabled={refreshing}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-opacity"
+                    style={{ background: '#FFFFFF', color: '#6B6B6B', border: '1px solid #E8E6DF',
+                             opacity: refreshing ? 0.6 : 1, cursor: refreshing ? 'default' : 'pointer' }}
+                    title="상대방이 다른 기기에서 추가한 기록 불러오기">
+              <RefreshCw size={12} style={{ animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }} />
+              {refreshing ? '불러오는 중…' : '새로고침'}
+            </button>
+          </div>
+
+          <p className="mt-5 text-sm leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+            매수·매도·배당을 함께 기록하며 목표를 향해 가요.<br/>
+            아래 칩을 눌러 빠르게 추가할 수 있어요.
+          </p>
+        </header>
+
+        {/* Stats grid */}
+        <section className="mb-7 anim-in">
+          {(() => {
+            const md = statsScope === 'month'
+              ? (stats.byMonth[selectedMonth] || { buys: 0, sells: 0, dividends: 0, realized: 0 })
+              : null;
+            const buys = md ? md.buys : stats.totalBuys;
+            const sells = md ? md.sells : stats.totalSells;
+            const divs = md ? md.dividends : stats.totalDividends;
+            const realized = md ? md.realized : stats.realizedProfit;
+
+            // 월 이동
+            const shiftMonth = (delta) => {
+              const [y, mo] = selectedMonth.split('-').map(Number);
+              const d = new Date(y, mo - 1 + delta, 1);
+              setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
+            };
+            const monthLabel = `${selectedMonth.slice(0,4)}년 ${Number(selectedMonth.slice(5,7))}월`;
+
+            return (
+              <>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  {statsScope === 'month' ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button onClick={() => shiftMonth(-1)}
+                              className="p-1.5 rounded-lg hover:bg-stone-100" title="이전 달">
+                        <ChevronRight size={15} color="#6B6B6B" style={{ transform:'rotate(180deg)' }} />
+                      </button>
+                      <span className="text-sm font-bold tabular" style={{ color: 'var(--ink)', minWidth: 96, textAlign:'center' }}>
+                        {monthLabel}
+                      </span>
+                      <button onClick={() => shiftMonth(1)}
+                              className="p-1.5 rounded-lg hover:bg-stone-100" title="다음 달"
+                              disabled={selectedMonth >= stats.curMonth}
+                              style={{ opacity: selectedMonth >= stats.curMonth ? 0.3 : 1 }}>
+                        <ChevronRight size={15} color="#6B6B6B" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-xs" style={{ color: 'var(--ink-3)' }}>전체 기간</div>
+                  )}
+
+                  <div className="inline-flex p-0.5 rounded-full" style={{ background: '#EDE9DC' }}>
+                    {[['all','전체'],['month','월별']].map(([k, lbl]) => {
+                      const active = statsScope === k;
+                      return (
+                        <button key={k}
+                                onClick={() => {
+                                  setStatsScope(k);
+                                  if (k === 'month') setSelectedMonth(stats.curMonth);
+                                }}
+                                className="text-xs font-semibold px-3.5 py-1.5 rounded-full transition-all"
+                                style={{
+                                  background: active ? '#FFFFFF' : 'transparent',
+                                  color: active ? '#0A0A0A' : '#8B8680',
+                                  boxShadow: active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'
+                                }}>
+                          {lbl}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 빠른 월 선택 (기록이 있는 달) */}
+                {statsScope === 'month' && stats.months.length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {stats.months.slice().reverse().map(m => {
+                      const active = m === selectedMonth;
+                      return (
+                        <button key={m} onClick={() => setSelectedMonth(m)}
+                                className="text-xs font-medium px-2.5 py-1 rounded-full transition-all tabular"
+                                style={{
+                                  background: active ? '#0A0A0A' : '#FAF9F5',
+                                  color: active ? '#FFFFFF' : '#6B6B6B',
+                                  border: `1px solid ${active ? '#0A0A0A' : '#E8E6DF'}`
+                                }}>
+                          {m.slice(0,4)}.{m.slice(5,7)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <StatCard label="총 매수" value={buys} accent="#0B7048" />
+                  <StatCard label="총 매도" value={sells} accent="#A82828" />
+                  <StatCard label="총 배당" value={divs} accent="#9A640E" />
+                  <StatCard label="실현 수익" value={realized}
+                            accent={realized >= 0 ? '#0A0A0A' : '#A82828'} showSign />
+                </div>
+              </>
+            );
+          })()}
+        </section>
+
+        {/* Quick add chips */}
+        <section className="text-center mb-6 anim-in">
+          <div className="text-xs mb-3" style={{ color: 'var(--ink-3)' }}>오늘 정리할 항목</div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {Object.entries(ENTRY_TYPES).map(([k, v]) => (
+              <button key={k}
+                      onClick={() => openAddWithType(k)}
+                      className="quick-chip"
+                      style={{ background: v.bgChip, color: v.textChip }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: v.hue }} />
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Primary action */}
+        <div className="flex justify-center mb-10 anim-in">
+          <button onClick={openAdd} className="btn-primary">
+            기록 추가 <ChevronRight size={16} />
+          </button>
+        </div>
+
+        {/* Chart */}
+        {stats.cumSeries.length >= 2 && (
+          <section className="card p-5 sm:p-6 mb-5 anim-in">
+            <div className="mb-4">
+              <h2 className="text-[15px] font-bold">순 매수 추이</h2>
+              <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
+                전체 기간 · 누적 매수 − 매도
+              </p>
+            </div>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={stats.cumSeries} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="valGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10A86F" stopOpacity={0.22}/>
+                      <stop offset="100%" stopColor="#10A86F" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#EDE9DC" strokeDasharray="2 4" vertical={false}/>
+                  <XAxis dataKey="date"
+                         tick={{ fontSize: 11, fill:'#A39E94' }}
+                         tickLine={false} axisLine={{ stroke:'#EDE9DC' }}
+                         tickFormatter={(d) => d.slice(5).replace('-', '/')}
+                         minTickGap={20} />
+                  <YAxis tick={{ fontSize: 11, fill:'#A39E94' }}
+                         tickLine={false} axisLine={false}
+                         tickFormatter={formatAxis} width={50} />
+                  <Tooltip contentStyle={{
+                            background:'#0A0A0A', border:'none', borderRadius:10,
+                            fontSize:12, color:'#FFFFFF', padding:'8px 12px'
+                          }}
+                          labelStyle={{ color:'#A39E94', marginBottom:4 }}
+                          formatter={(v) => [`₩${formatKRW(v)}`, '순 매수']} />
+                  <Area type="monotone" dataKey="value"
+                        stroke="#10A86F" strokeWidth={2.5}
+                        fill="url(#valGrad)"
+                        dot={{ r: 3, fill:'#10A86F', strokeWidth: 0 }}
+                        activeDot={{ r: 5, fill:'#10A86F' }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        )}
+
+        {/* Entries */}
+        <section className="card p-5 sm:p-6 mb-6 anim-in">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h2 className="text-[15px] font-bold">전체 기록</h2>
+            <div className="flex flex-wrap gap-1.5">
+              <FilterPill active={filterType==='all'} onClick={() => setFilterType('all')}>전체</FilterPill>
+              {Object.entries(ENTRY_TYPES).map(([k, v]) => (
+                <FilterPill key={k} active={filterType===k}
+                            onClick={() => setFilterType(k)} color={v.hue}>
+                  {v.label}
+                </FilterPill>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 mb-4 pb-4"
+               style={{ borderBottom: '1px solid var(--border-soft)' }}>
+            <FilterPill active={filterAuthor==='all'} onClick={() => setFilterAuthor('all')}>모두</FilterPill>
+            {Object.entries(AUTHORS).map(([k, v]) => (
+              <FilterPill key={k} active={filterAuthor===k}
+                          onClick={() => setFilterAuthor(k)} color={v.color}>
+                {v.label}
+              </FilterPill>
+            ))}
+          </div>
+
+          {visibleEntries.length === 0 ? (
+            <div className="text-center py-10">
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                {validEntries.length === 0
+                  ? '아직 기록이 없어요. 첫 기록을 남겨보세요'
+                  : '조건에 맞는 기록이 없어요'}
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              {visibleEntries.map((e, i) => (
+                <EntryRow key={e.id} entry={e}
+                          onEdit={() => openEdit(e)}
+                          onDelete={() => removeEntry(e.id)}
+                          isLast={i === visibleEntries.length - 1} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <footer className="text-center text-xs mt-8" style={{ color: 'var(--muted)' }}>
+          💾 자동 저장됨 · 두 분이 함께 보는 일지예요
+        </footer>
+      </div>
+
+      {showForm && (
+        <FormModal
+          editing={!!editingId}
+          symbols={symbols}
+          onAddSymbol={addSymbol}
+          onRemoveSymbol={removeSymbol}
+          fType={fType} setFType={setFType}
+          fAuthor={fAuthor} setFAuthor={setFAuthor}
+          fDate={fDate} setFDate={setFDate}
+          fAmount={fAmount} setFAmount={setFAmount}
+          fShares={fShares} setFShares={setFShares}
+          fSymbol={fSymbol} setFSymbol={setFSymbol}
+          fNote={fNote} setFNote={setFNote}
+          formError={formError}
+          onClose={() => { setShowForm(false); resetForm(); }}
+          onSubmit={submit}
+        />
+      )}
+
+      {showGoalModal && (
+        <GoalModal
+          currentGoals={goals}
+          currentActuals={actuals}
+          autoActuals={{
+            monthly: stats.realizedMonth,
+            annual: stats.realizedYear,
+            total: assets.total,
+          }}
+          onSave={({ goals: g, actuals: a }) => {
+            persistGoals(g);
+            persistActuals(a);
+            setShowGoalModal(false);
+          }}
+          onClose={() => setShowGoalModal(false)}
+        />
+      )}
+
+      {showAssetsModal && (
+        <AssetsModal
+          current={assets}
+          onSave={(next) => { persistAssets(next); setShowAssetsModal(false); }}
+          onClose={() => setShowAssetsModal(false)}
+        />
+      )}
+
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={() => { confirmState.onConfirm?.(); setConfirmState(null); }}
+          onCancel={() => setConfirmState(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ===== Subcomponents =====
+
+function StatCard({ label, value, accent, showSign }) {
+  const sign = showSign && value > 0 ? '+' : '';
+  const color = value === 0 ? '#C9C3B5' : accent;
+  return (
+    <div className="card p-4">
+      <div className="text-xs font-medium" style={{ color: '#A39E94' }}>{label}</div>
+      <div className="num-display tabular mt-2 leading-tight"
+           style={{ color, fontSize: 'clamp(15px, 4vw, 18px)' }}>
+        {value === 0 ? '0원' : (sign + formatKoreanWon(value))}
+      </div>
+    </div>
+  );
+}
+
+function FilterPill({ children, active, onClick, color }) {
+  return (
+    <button
+      onClick={onClick}
+      className="text-xs font-medium px-3 py-1.5 rounded-full transition-all"
+      style={{
+        background: active ? '#0A0A0A' : 'transparent',
+        color: active ? '#FFFFFF' : (color || '#6B6B6B'),
+        border: `1px solid ${active ? '#0A0A0A' : '#E8E6DF'}`
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function EntryRow({ entry, onEdit, onDelete, isLast }) {
+  const t = ENTRY_TYPES[entry.type];
+  const a = AUTHORS[entry.author];
+
+  return (
+    <div className="group flex items-start gap-3 py-3.5"
+         style={{ borderBottom: isLast ? 'none' : '1px solid #F0EDE2' }}>
+      <div className="flex-shrink-0 w-1 rounded-full self-stretch"
+           style={{ background: t.hue, minHeight: 36 }} />
+
+      <div className="flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full"
+                style={{ background: t.bgChip, color: t.textChip }}>
+            <span className="w-1 h-1 rounded-full" style={{ background: t.hue }} />
+            {t.label}
+          </span>
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full"
+                style={{ background: a.bgChip, color: a.textChip }}>
+            {a.label}
+          </span>
+          {entry.symbol && (
+            <span className="text-sm font-semibold" style={{ color: '#0A0A0A' }}>
+              {entry.symbol}
+            </span>
+          )}
+          <span className="text-xs ml-auto" style={{ color: '#A39E94' }}>
+            {formatRelative(entry.date)}
+          </span>
+        </div>
+
+        {entry.amount != null && entry.type !== 'note' && (
+          <div className="num-display tabular text-[17px] mt-1 flex items-baseline gap-2" style={{ color: '#0A0A0A' }}>
+            <span>₩{formatKRW(entry.amount)}</span>
+            {entry.shares > 0 && (
+              <span className="text-[13px] font-medium" style={{ color: '#A39E94' }}>
+                {entry.shares}주
+              </span>
+            )}
+          </div>
+        )}
+
+        {entry.note && (
+          <div className="mt-1 text-sm leading-relaxed whitespace-pre-wrap"
+               style={{ color: '#4A4A4A' }}>
+            {entry.note}
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-stone-100" title="수정">
+          <Edit3 size={13} color="#8B8680" />
+        </button>
+        <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-stone-100" title="삭제">
+          <Trash2 size={13} color="#DC4848" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GoalProgress({ label, target, actual, pct, hue, subtitle, manual }) {
+  if (!target || target <= 0) return null;
+  const clamped = Math.min(pct, 100);
+  const reached = pct >= 100;
+  return (
+    <div className="card p-4 text-left">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: hue }} />
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--ink-2)' }}>{label}</span>
+          {manual && (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+                  style={{ background: '#FAF9F5', color: '#A39E94', border: '1px solid #ECE9E0' }}>
+              직접 입력
+            </span>
+          )}
+        </div>
+        <span className="num-display tabular text-[20px]"
+              style={{ color: reached ? '#10A86F' : 'var(--ink)' }}>
+          {Math.round(pct)}<span className="text-[13px] font-bold" style={{ color: 'var(--ink-3)' }}>%</span>
+        </span>
+      </div>
+      <div className="progress-bar mb-2">
+        <div className="progress-fill"
+             style={{ width: `${clamped}%`, background: `linear-gradient(90deg, ${hue} 0%, ${hue}cc 100%)` }} />
+      </div>
+      <div className="flex justify-between items-baseline text-xs tabular">
+        <span style={{ color: 'var(--ink-2)' }}>
+          <strong className="font-bold">{formatKoreanWon(actual)}</strong>
+        </span>
+        <span style={{ color: 'var(--muted)' }}>목표 {formatKoreanWon(target)}</span>
+      </div>
+      {subtitle && (
+        <div className="mt-1.5 text-[11px]" style={{ color: 'var(--muted)' }}>{subtitle}</div>
+      )}
+    </div>
+  );
+}
+
+function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose }) {
+  const [monthly, setMonthly] = useState(currentGoals.monthly > 0 ? String(currentGoals.monthly) : '');
+  const [annual,  setAnnual]  = useState(currentGoals.annual  > 0 ? String(currentGoals.annual)  : '');
+  const [total,   setTotal]   = useState(currentGoals.total   > 0 ? String(currentGoals.total)   : '');
+
+  // 현재 금액: 직접 입력값이 있으면 그 값, 없으면 빈칸(=자동계산 사용)
+  const [actMonthly, setActMonthly] = useState(currentActuals.monthly != null ? String(currentActuals.monthly) : '');
+  const [actAnnual,  setActAnnual]  = useState(currentActuals.annual  != null ? String(currentActuals.annual)  : '');
+  const [actTotal,   setActTotal]   = useState(currentActuals.total   != null ? String(currentActuals.total)   : '');
+
+  const save = () => {
+    const goals = {
+      monthly: Math.max(0, parseNum(monthly)),
+      annual:  Math.max(0, parseNum(annual)),
+      total:   Math.max(0, parseNum(total)),
+    };
+    // 빈칸이면 null(자동계산), 입력했으면 숫자
+    const toActual = (s) => s.trim() === '' ? null : parseNum(s);
+    const actuals = {
+      monthly: toActual(actMonthly),
+      annual:  toActual(actAnnual),
+      total:   toActual(actTotal),
+    };
+    onSave({ goals, actuals });
+  };
+
+  const clearGoals = () => {
+    onSave({
+      goals: { monthly: 0, annual: 0, total: 0 },
+      actuals: { monthly: null, annual: null, total: null },
+    });
+  };
+
+  const hasAny = currentGoals.monthly > 0 || currentGoals.annual > 0 || currentGoals.total > 0;
+
+  const GOAL_FIELDS = [
+    { key: 'monthly', value: monthly, set: setMonthly, label: '월별 목표', hue: '#7C6FD9',
+      desc: '이번 달 실현 수익 목표', placeholder: '500,000',
+      actValue: actMonthly, actSet: setActMonthly, actLabel: '이번 달 실현 수익', auto: autoActuals.monthly },
+    { key: 'annual', value: annual, set: setAnnual, label: '연간 목표', hue: '#5CB3E8',
+      desc: '올해 실현 수익 목표', placeholder: '10,000,000',
+      actValue: actAnnual, actSet: setActAnnual, actLabel: '올해 실현 수익', auto: autoActuals.annual },
+    { key: 'total', value: total, set: setTotal, label: '총 자산 목표', hue: '#10A86F',
+      desc: '도달하고 싶은 총 자산', placeholder: '100,000,000',
+      actValue: actTotal, actSet: setActTotal, actLabel: '현재 금액', auto: autoActuals.total },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center px-4 py-6 modal-back"
+         style={{ background:'rgba(15,12,5,0.45)', backdropFilter:'blur(4px)' }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card card w-full max-w-md max-h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-xl font-extrabold flex items-center gap-2">
+              <Target size={20} color="#E0483F"/> 목표 설정
+            </h3>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
+              <X size={18} color="#6B6B6B"/>
+            </button>
+          </div>
+
+          <p className="text-sm mb-5 leading-relaxed" style={{ color: '#6B6B6B' }}>
+            목표 금액과 현재 금액을 직접 입력할 수 있어요.<br/>
+            <span style={{ color: '#A39E94' }}>목표를 비우면 카드가 숨겨지고, 현재 금액을 비우면 기록에서 자동 계산돼요.</span>
+          </p>
+
+          <div className="flex flex-col gap-6">
+            {GOAL_FIELDS.map(f => (
+              <div key={f.key} className="p-4 rounded-xl" style={{ background:'#FAF9F5', border:'1px solid #F0EDE2' }}>
+                <div className="label flex items-center gap-1.5 mb-3" style={{ marginBottom: 12 }}>
+                  <span className="w-2 h-2 rounded-full" style={{ background: f.hue }} />
+                  {f.label}
+                </div>
+
+                <label className="text-xs font-medium block mb-1.5" style={{ color:'#8B8680' }}>
+                  목표 금액 <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.desc}</span>
+                </label>
+                <input
+                  className="input tabular text-lg num-display"
+                  inputMode="decimal"
+                  placeholder={f.placeholder}
+                  value={f.value}
+                  onChange={e => f.set(e.target.value)}
+                />
+                {f.value && parseNum(f.value) > 0 && (
+                  <div className="mt-1 text-xs tabular" style={{ color: f.hue }}>
+                    {formatKoreanWon(parseNum(f.value))}
+                  </div>
+                )}
+
+                <label className="text-xs font-medium block mb-1.5 mt-3.5" style={{ color:'#8B8680' }}>
+                  현재 금액 <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.actLabel} (비우면 자동)</span>
+                </label>
+                <input
+                  className="input tabular text-lg num-display"
+                  inputMode="decimal"
+                  placeholder={`자동: ${formatKRW(f.auto)}`}
+                  value={f.actValue}
+                  onChange={e => f.actSet(e.target.value)}
+                />
+                <div className="mt-1 text-xs tabular" style={{ color: '#A39E94' }}>
+                  {f.actValue.trim() !== ''
+                    ? formatKoreanWon(parseNum(f.actValue))
+                    : `자동 계산값 사용 · ${formatKoreanWon(f.auto)}`}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2 mt-7">
+            {hasAny ? (
+              <button onClick={clearGoals} className="btn-outline"
+                      style={{ color: '#A82828', borderColor: '#FCD5D5' }}>
+                전체 삭제
+              </button>
+            ) : (
+              <button onClick={onClose} className="btn-outline flex-1 justify-center">취소</button>
+            )}
+            <button onClick={save}
+                    className="btn-primary flex-1 justify-center"
+                    style={{padding:'13px 22px'}}>
+              <Save size={14}/> 저장
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FormModal({
+  editing, symbols, onAddSymbol, onRemoveSymbol,
+  fType, setFType, fAuthor, setFAuthor, fDate, setFDate,
+  fAmount, setFAmount, fShares, setFShares, fSymbol, setFSymbol, fNote, setFNote,
+  formError, onClose, onSubmit
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newSym, setNewSym] = useState('');
+  const [symOpen, setSymOpen] = useState(true);
+
+  const needsSymbol = fType === 'buy' || fType === 'sell';
+  const allowSymbol = needsSymbol || fType === 'dividend' || fType === 'note';
+  const needsAmount = fType !== 'note';
+  const allowShares = fType === 'buy' || fType === 'sell';
+
+  const visibleSymbols = useMemo(() => {
+    if (fSymbol && !symbols.includes(fSymbol)) return [...symbols, fSymbol];
+    return symbols;
+  }, [symbols, fSymbol]);
+
+  const handleAddNew = () => {
+    const trimmed = newSym.trim();
+    if (!trimmed) { setAdding(false); return; }
+    const ok = onAddSymbol(trimmed);
+    if (ok) setFSymbol(trimmed);
+    setNewSym('');
+    setAdding(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center px-4 py-6 modal-back"
+         style={{ background:'rgba(15,12,5,0.45)', backdropFilter:'blur(4px)' }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card card w-full max-w-lg max-h-full overflow-y-auto"
+           onClick={e => e.stopPropagation()}>
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-extrabold">
+              {editing ? '기록 수정' : '오늘의 기록'}
+            </h3>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
+              <X size={18} color="#6B6B6B" />
+            </button>
+          </div>
+
+          {/* Type */}
+          <div className="mb-5">
+            <span className="label">유형</span>
+            <div className="grid grid-cols-4 gap-2">
+              {Object.entries(ENTRY_TYPES).map(([k, v]) => {
+                const active = fType === k;
+                return (
+                  <button key={k} onClick={() => setFType(k)}
+                          className="py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-1.5"
+                          style={{
+                            background: active ? v.bgChip : '#FAF9F5',
+                            color: active ? v.textChip : '#6B6B6B',
+                            border: `1px solid ${active ? v.hue + '55' : '#E8E6DF'}`
+                          }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: v.hue }} />
+                    {v.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Author */}
+          <div className="mb-5">
+            <span className="label">작성자</span>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(AUTHORS).map(([k, v]) => {
+                const active = fAuthor === k;
+                return (
+                  <button key={k} onClick={() => setFAuthor(k)}
+                          className="py-2.5 rounded-xl font-medium text-sm transition-all"
+                          style={{
+                            background: active ? v.color : v.bgChip,
+                            color: active ? '#FFFFFF' : v.textChip,
+                            border: `1px solid ${active ? v.color : v.bgChip}`
+                          }}>
+                    {v.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Date */}
+          <div className="mb-5">
+            <label className="label">날짜</label>
+            <input type="date" className="input tabular"
+                   value={fDate} onChange={e => setFDate(e.target.value)} />
+          </div>
+
+          {/* Symbol picker (toggle + checkbox list) */}
+          {allowSymbol && (
+            <div className="mb-5">
+              <label className="label">
+                종목 {!needsSymbol && <span style={{ color:'#A39E94' }}>(선택)</span>}
+              </label>
+
+              {/* Toggle header */}
+              <button type="button"
+                      onClick={() => setSymOpen(o => !o)}
+                      className="w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all"
+                      style={{
+                        background: '#FAF9F5',
+                        border: `1px solid ${fSymbol ? ENTRY_TYPES[fType].hue + '55' : '#E8E6DF'}`,
+                      }}>
+                <span className="flex items-center gap-2 text-sm font-medium" style={{ color: fSymbol ? '#0A0A0A' : '#A39E94' }}>
+                  {fSymbol ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full" style={{ background: ENTRY_TYPES[fType].hue }} />
+                      {fSymbol}
+                    </>
+                  ) : '종목 선택하기'}
+                </span>
+                <ChevronDown size={16} color="#8B8680"
+                             style={{ transform: symOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
+              </button>
+
+              {/* Checkbox list */}
+              {symOpen && (
+                <div className="mt-2 rounded-xl overflow-hidden"
+                     style={{ border: '1px solid #E8E6DF' }}>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {visibleSymbols.map((s, i) => {
+                      const active = fSymbol === s;
+                      const t = ENTRY_TYPES[fType];
+                      return (
+                        <div key={s} className="sym-wrap flex items-center gap-2.5 px-3.5 py-2.5 transition-colors"
+                             style={{
+                               background: active ? t.bgChip : '#FFFFFF',
+                               borderBottom: i === visibleSymbols.length - 1 ? 'none' : '1px solid #F0EDE2',
+                               cursor: 'pointer'
+                             }}
+                             onClick={() => setFSymbol(active ? '' : s)}>
+                          {/* checkbox */}
+                          <span className="flex items-center justify-center flex-shrink-0"
+                                style={{
+                                  width: 20, height: 20, borderRadius: 6,
+                                  background: active ? t.hue : '#FFFFFF',
+                                  border: `1.5px solid ${active ? t.hue : '#CFC9BC'}`,
+                                  transition: 'all .12s ease'
+                                }}>
+                            {active && <Check size={13} color="#FFFFFF" strokeWidth={3} />}
+                          </span>
+                          <span className="flex-1 text-sm font-medium"
+                                style={{ color: active ? t.textChip : '#4A4A4A' }}>
+                            {s}
+                          </span>
+                          <button type="button"
+                                  onClick={(e) => { e.stopPropagation(); onRemoveSymbol(s); }}
+                                  title="목록에서 삭제"
+                                  className="sym-x flex items-center justify-center transition-opacity"
+                                  style={{
+                                    width: 22, height: 22, borderRadius: 9999,
+                                    opacity: 0.35, color: '#6B6B6B', background: 'transparent'
+                                  }}>
+                            <X size={13} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Add new row */}
+                  <div className="px-3.5 py-2.5" style={{ borderTop: '1px solid #F0EDE2', background: '#FAF9F5' }}>
+                    {adding ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          autoFocus
+                          value={newSym}
+                          onChange={e => setNewSym(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') { e.preventDefault(); handleAddNew(); }
+                            if (e.key === 'Escape') { setAdding(false); setNewSym(''); }
+                          }}
+                          placeholder="종목명 입력"
+                          className="text-sm rounded-lg flex-1"
+                          style={{
+                            background:'#FFFFFF', border:'1px solid #0A0A0A',
+                            padding: '7px 12px', color:'#0A0A0A', outline:'none'
+                          }}
+                        />
+                        <button type="button" onClick={handleAddNew}
+                                className="flex items-center justify-center flex-shrink-0"
+                                style={{ background:'#0A0A0A', color:'#FFFFFF', width: 30, height: 30, borderRadius: 9999 }}>
+                          <Check size={14} />
+                        </button>
+                        <button type="button"
+                                onClick={() => { setAdding(false); setNewSym(''); }}
+                                className="flex items-center justify-center flex-shrink-0"
+                                style={{ background:'transparent', color:'#8B8680', width: 30, height: 30, borderRadius: 9999, border:'1px solid #E8E6DF' }}>
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button"
+                              onClick={() => setAdding(true)}
+                              className="w-full text-sm font-medium py-1.5 rounded-lg transition-all flex items-center justify-center gap-1"
+                              style={{ background: 'transparent', color: '#0A0A0A', border: '1px dashed #B5AC97' }}>
+                        <Plus size={13} /> 종목 추가
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {needsSymbol && !fSymbol && (
+                <div className="mt-2 text-xs" style={{ color: '#A39E94' }}>
+                  종목을 선택하거나 새로 추가해보세요
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Amount */}
+          {needsAmount && (
+            <div className="mb-5">
+              <label className="label">
+                {fType === 'buy' && '매수 금액 (₩)'}
+                {fType === 'sell' && '매도 금액 (₩)'}
+                {fType === 'dividend' && '배당 금액 (₩)'}
+              </label>
+              <input className="input tabular text-lg"
+                     inputMode="decimal"
+                     placeholder="100,000"
+                     value={fAmount}
+                     onChange={e => setFAmount(e.target.value)} />
+              {fAmount && parseNum(fAmount) > 0 && (
+                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                  {formatKoreanWon(parseNum(fAmount))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Shares (buy/sell) */}
+          {allowShares && (
+            <div className="mb-5">
+              <label className="label">
+                수량 (주) <span style={{ color:'#A39E94' }}>(선택)</span>
+              </label>
+              <input className="input tabular text-lg"
+                     inputMode="decimal"
+                     placeholder="10"
+                     value={fShares}
+                     onChange={e => setFShares(e.target.value)} />
+              {fShares && parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
+                <div className="mt-2 text-xs tabular" style={{ color: '#A39E94' }}>
+                  {parseNum(fShares)}주 · 주당 약 {formatKoreanWon(parseNum(fAmount) / parseNum(fShares))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Memo */}
+          <div className="mb-6">
+            <label className="label">
+              메모 {fType !== 'note' && <span style={{ color:'#A39E94' }}>(선택)</span>}
+            </label>
+            <textarea className="input"
+                      rows={3}
+                      placeholder={fType === 'note'
+                        ? '시장에 대한 생각, 다짐, 복기 등을 자유롭게 적어보세요'
+                        : '오늘의 결정 이유, 시장 분위기 등을 짧게 남겨도 좋아요'}
+                      value={fNote}
+                      onChange={e => setFNote(e.target.value)}
+                      style={{ resize:'vertical', minHeight: 80 }} />
+          </div>
+
+          {formError && (
+            <div className="mb-3 text-sm font-medium px-3.5 py-2.5 rounded-xl flex items-center gap-2"
+                 style={{ background: '#FCE2E2', color: '#A82828', border: '1px solid #F3C7C7' }}>
+              <AlertTriangle size={14} /> {formError}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={onClose} className="btn-outline flex-1 justify-center"
+                    style={{ padding: '13px 22px' }}>
+              취소
+            </button>
+            <button onClick={onSubmit}
+                    className="btn-primary flex-1 justify-center"
+                    style={{ padding: '13px 22px' }}>
+              <Save size={14}/>
+              {editing ? '수정' : '저장'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDialog({ message, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6 modal-back"
+         style={{ background:'rgba(15,12,5,0.45)', backdropFilter:'blur(4px)' }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="modal-card card w-full max-w-xs" onClick={e => e.stopPropagation()}>
+        <div className="p-6">
+          <div className="flex items-start gap-3 mb-5">
+            <span className="flex items-center justify-center flex-shrink-0"
+                  style={{ width: 38, height: 38, borderRadius: 9999, background:'#FCE2E2' }}>
+              <Trash2 size={17} color="#DC4848" />
+            </span>
+            <p className="text-sm leading-relaxed whitespace-pre-line pt-1.5" style={{ color:'#4A4A4A' }}>
+              {message}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="btn-outline flex-1 justify-center"
+                    style={{ padding:'12px 18px' }}>
+              취소
+            </button>
+            <button onClick={onConfirm}
+                    className="flex-1 justify-center inline-flex items-center gap-1.5 rounded-full font-semibold text-sm"
+                    style={{ padding:'12px 18px', background:'#E04A4A', color:'#FFFFFF' }}>
+              <Trash2 size={14}/> 삭제
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssetsModal({ current, onSave, onClose }) {
+  const [total, setTotal]         = useState(current.total > 0 ? String(current.total) : '');
+  const [invested, setInvested]   = useState(current.invested > 0 ? String(current.invested) : '');
+  const [principal, setPrincipal] = useState(current.principal > 0 ? String(current.principal) : '');
+  const [prevMonth, setPrevMonth] = useState(current.prevMonth > 0 ? String(current.prevMonth) : '');
+  const [label, setLabel]         = useState(current.label || '');
+
+  const save = () => {
+    onSave({
+      total: parseNum(total),
+      invested: parseNum(invested),
+      principal: parseNum(principal),
+      prevMonth: parseNum(prevMonth),
+      label: label.trim(),
+    });
+  };
+
+  const inv = parseNum(invested), p = parseNum(principal), pm = parseNum(prevMonth);
+  const profit = inv - p;
+  const profitPct = p > 0 ? (profit / p) * 100 : null;
+  const monthDiff = pm > 0 ? inv - pm : null;
+  const monthPct = pm > 0 ? (monthDiff / pm) * 100 : null;
+
+  const FIELDS = [
+    { value: total, set: setTotal, label: '현재 총자산', desc: '주식 + 비유동 등 전체', placeholder: '150,609,066' },
+    { value: invested, set: setInvested, label: '투자 자산', desc: '주식 계좌 평가금액 · 손익 계산 기준', placeholder: '65,209,066' },
+    { value: principal, set: setPrincipal, label: '입금원금', desc: '실제 납입한 원금 (선택)', placeholder: '61,000,000' },
+    { value: prevMonth, set: setPrevMonth, label: '전월 투자자산', desc: '전월대비 계산용 (선택)', placeholder: '64,489,066' },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center px-4 py-6 modal-back"
+         style={{ background:'rgba(15,12,5,0.45)', backdropFilter:'blur(4px)' }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card card w-full max-w-md max-h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-xl font-extrabold flex items-center gap-2">
+              <Wallet size={20} color="#10A86F"/> 자산 현황
+            </h3>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-100">
+              <X size={18} color="#6B6B6B"/>
+            </button>
+          </div>
+
+          <p className="text-sm mb-5 leading-relaxed" style={{ color: '#6B6B6B' }}>
+            증권사 앱에 보이는 평가금액을 입력하면<br/>
+            <span style={{ color: '#A39E94' }}>입금대비·전월대비 손익이 자동으로 계산돼요.</span>
+          </p>
+
+          <div className="flex flex-col gap-5">
+            <div>
+              <label className="label">
+                자산 구성 <span style={{ color:'#A39E94', fontWeight: 400 }}>· 카드에 표시될 설명 (선택)</span>
+              </label>
+              <input
+                className="input"
+                placeholder="예: 주식 + 비유동"
+                value={label}
+                onChange={e => setLabel(e.target.value)}
+              />
+            </div>
+            {FIELDS.map((f, i) => (
+              <div key={i}>
+                <label className="label">
+                  {f.label} <span style={{ color:'#A39E94', fontWeight: 400 }}>· {f.desc}</span>
+                </label>
+                <input
+                  className="input tabular text-lg num-display"
+                  inputMode="decimal"
+                  placeholder={f.placeholder}
+                  value={f.value}
+                  onChange={e => f.set(e.target.value)}
+                />
+                {f.value && parseNum(f.value) > 0 && (
+                  <div className="mt-1.5 text-xs tabular" style={{ color: '#A39E94' }}>
+                    {formatKoreanWon(parseNum(f.value))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {(profitPct != null || monthPct != null) && (
+            <div className="mt-5 p-4 rounded-xl" style={{ background:'#FAF9F5', border:'1px solid #F0EDE2' }}>
+              {profitPct != null && (
+                <div className="flex items-center justify-between text-sm mb-1.5">
+                  <span style={{ color:'#6B6B6B' }}>입금대비 손익</span>
+                  <span className="tabular font-bold" style={{ color: profit >= 0 ? '#E04A4A' : '#3D7FD6' }}>
+                    {profit >= 0 ? '+' : ''}{formatKoreanWon(profit)} ({profit >= 0 ? '+' : ''}{profitPct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
+              {monthPct != null && (
+                <div className="flex items-center justify-between text-sm">
+                  <span style={{ color:'#6B6B6B' }}>전월대비</span>
+                  <span className="tabular font-bold" style={{ color: monthDiff >= 0 ? '#E04A4A' : '#3D7FD6' }}>
+                    {monthDiff >= 0 ? '+' : ''}{formatKoreanWon(monthDiff)} ({monthDiff >= 0 ? '+' : ''}{monthPct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2 mt-6">
+            <button onClick={onClose} className="btn-outline flex-1 justify-center">취소</button>
+            <button onClick={save}
+                    className="btn-primary flex-1 justify-center"
+                    style={{padding:'13px 22px'}}>
+              <Save size={14}/> 저장
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== 마운트 ===================== */
+function PasscodeGate({ children }) {
+  const [ok, setOk] = useState(!APP_PASSCODE);
+  const [v, setV] = useState('');
+  const [err, setErr] = useState(false);
+  if (ok) return children;
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4" style={{ background:'#F5F4F0' }}>
+      <div className="card p-7 w-full max-w-xs" style={{ background:'#fff', border:'1px solid #E8E6DF', borderRadius:16 }}>
+        <h2 className="text-lg font-extrabold mb-1">투자 일지</h2>
+        <p className="text-sm mb-4" style={{ color:'#6B6B6B' }}>공유 암호를 입력하세요.</p>
+        <input className="input" type="password" value={v} autoFocus
+               onKeyDown={e => { if (e.key === 'Enter') { if (v === APP_PASSCODE) setOk(true); else setErr(true); } }}
+               onChange={e => { setV(e.target.value); setErr(false); }}
+               style={{ width:'100%', padding:'12px 14px', borderRadius:12, border:'1px solid #E8E6DF', fontSize:16 }} />
+        {err && <div className="text-xs mt-2" style={{ color:'#A82828' }}>암호가 맞지 않아요.</div>}
+        <button onClick={() => { if (v === APP_PASSCODE) setOk(true); else setErr(true); }}
+                className="btn-primary" style={{ marginTop:14, width:'100%', justifyContent:'center', padding:'12px' }}>
+          들어가기
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const rootEl = document.getElementById('root');
+if (cfgMissing) {
+  rootEl.innerHTML = `
+    <div class="setup">
+      <h1>⚙️ Firebase 설정이 필요해요</h1>
+      <p>이 파일(<code>index.html</code>) 상단의 <code>firebaseConfig</code> 값을 본인 Firebase 프로젝트 값으로 바꾼 뒤 다시 열어주세요.</p>
+      <ol>
+        <li><a href="https://console.firebase.google.com" target="_blank">Firebase 콘솔</a>에서 프로젝트 생성</li>
+        <li>왼쪽 <b>빌드 → Firestore Database</b> → 데이터베이스 만들기 (테스트 모드로 시작)</li>
+        <li><b>프로젝트 설정(톱니바퀴) → 내 앱 → 웹 앱 추가(&lt;/&gt;)</b></li>
+        <li>표시되는 <code>firebaseConfig</code> 객체를 복사해 이 파일에 붙여넣기</li>
+      </ol>
+      <p>설정값은 공개돼도 정상입니다. 접근 제어는 Firestore 보안 규칙으로 합니다.</p>
+    </div>`;
+} else {
+  createRoot(rootEl).render(<PasscodeGate><App /></PasscodeGate>);
+  if (firebaseError) {
+    console.warn('Firestore 연결에 문제가 있을 수 있어요. 보안 규칙을 확인하세요.');
+  }
+}
+</script>
+</body>
+</html>
