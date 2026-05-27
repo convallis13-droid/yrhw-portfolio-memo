@@ -278,6 +278,8 @@ function App() {
   const [fAmount, setFAmount] = useState('');
   const [fShares, setFShares] = useState('');
   const [fAvg, setFAvg] = useState('');
+  const [fRealAmt, setFRealAmt] = useState(''); // 매도 실현수익 (₩)
+  const [fRealPct, setFRealPct] = useState(''); // 매도 실현 수익률 (%)
   const [fSymbol, setFSymbol] = useState('');
   const [fNote, setFNote] = useState('');
 
@@ -586,7 +588,7 @@ function App() {
   const resetForm = () => {
     setFType('buy');
     setFDate(todayStr());
-    setFAmount(''); setFShares(''); setFAvg(''); setFSymbol(''); setFNote('');
+    setFAmount(''); setFShares(''); setFAvg(''); setFRealAmt(''); setFRealPct(''); setFSymbol(''); setFNote('');
     setFormError('');
     setEditingId(null);
   };
@@ -607,6 +609,8 @@ function App() {
     setFAmount(e.amount ? String(e.amount) : '');
     setFShares(e.shares ? String(e.shares) : '');
     setFAvg(e.avg ? String(e.avg) : '');
+    setFRealAmt(e.realizedAmt != null ? String(e.realizedAmt) : '');
+    setFRealPct(e.realizedPct != null ? String(e.realizedPct) : '');
     setFSymbol(e.symbol || '');
     setFNote(e.note || '');
     setShowForm(true);
@@ -658,6 +662,25 @@ function App() {
       } else if (sh > 0 && amt > 0) {
         base.avg = amt / sh;
       }
+    }
+
+    // 실현수익 (매도 전용): 금액(₩)·수익률(%) 둘 다 선택 입력
+    if (fType === 'sell') {
+      let rAmt = fRealAmt.trim() !== '' ? parseNum(fRealAmt) : null;
+      let rPct = fRealPct.trim() !== '' ? parseNum(fRealPct) : null;
+      const proceeds = amt; // 매도 금액(입력 또는 수량×평단가 자동값)
+
+      // 한쪽만 입력했고 매도금액이 있으면 나머지를 자동 계산
+      if (proceeds > 0 && rAmt != null && rPct == null) {
+        const cost = proceeds - rAmt;        // 매입원가 = 매도금액 − 실현수익
+        if (cost > 0) rPct = (rAmt / cost) * 100;
+      } else if (proceeds > 0 && rAmt == null && rPct != null) {
+        const cost = proceeds / (1 + rPct / 100);
+        rAmt = proceeds - cost;
+      }
+
+      if (rAmt != null) base.realizedAmt = Math.round(rAmt);
+      if (rPct != null) base.realizedPct = Math.round(rPct * 100) / 100; // 소수 둘째 자리
     }
 
     const next = editingId
@@ -1038,6 +1061,8 @@ function App() {
           fAmount={fAmount} setFAmount={setFAmount}
           fShares={fShares} setFShares={setFShares}
           fAvg={fAvg} setFAvg={setFAvg}
+          fRealAmt={fRealAmt} setFRealAmt={setFRealAmt}
+          fRealPct={fRealPct} setFRealPct={setFRealPct}
           fSymbol={fSymbol} setFSymbol={setFSymbol}
           fNote={fNote} setFNote={setFNote}
           formError={formError}
@@ -1199,6 +1224,25 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
             )}
           </div>
         )}
+
+        {entry.type === 'sell' && (entry.realizedAmt != null || entry.realizedPct != null) && (() => {
+          const ref = entry.realizedAmt != null ? entry.realizedAmt : entry.realizedPct;
+          const gain = ref >= 0;
+          return (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 text-[13px] font-bold px-2.5 py-1 rounded-lg tabular"
+                 style={{ background: gain ? '#FCE2E2' : '#E1ECFC', color: gain ? '#A82828' : '#2C68B8' }}>
+              <span>실현수익</span>
+              {entry.realizedAmt != null && (
+                <span>{entry.realizedAmt > 0 ? '+' : ''}{formatKRW(entry.realizedAmt)}원</span>
+              )}
+              {entry.realizedPct != null && (
+                <span style={{ opacity: 0.85 }}>
+                  ({entry.realizedPct > 0 ? '+' : ''}{entry.realizedPct}%)
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         {entry.note && (
           <div className="mt-1 text-sm leading-relaxed whitespace-pre-wrap"
@@ -1384,7 +1428,9 @@ function GoalModal({ currentGoals, currentActuals, autoActuals, onSave, onClose 
 function FormModal({
   editing, symbols, onAddSymbol, onRemoveSymbol,
   fType, setFType, fAuthor, setFAuthor, fDate, setFDate,
-  fAmount, setFAmount, fShares, setFShares, fAvg, setFAvg, fSymbol, setFSymbol, fNote, setFNote,
+  fAmount, setFAmount, fShares, setFShares, fAvg, setFAvg,
+  fRealAmt, setFRealAmt, fRealPct, setFRealPct,
+  fSymbol, setFSymbol, fNote, setFNote,
   formError, onClose, onSubmit
 }) {
   const [adding, setAdding] = useState(false);
@@ -1670,6 +1716,62 @@ function FormModal({
               ))}
             </div>
           )}
+
+          {/* 실현수익 (매도 전용) */}
+          {fType === 'sell' && (() => {
+            const proceeds = parseNum(fAmount) > 0 ? parseNum(fAmount)
+                           : parseNum(fShares) * parseNum(fAvg);
+            const hasAmt = fRealAmt.trim() !== '';
+            const hasPct = fRealPct.trim() !== '';
+            const rAmtVal = parseNum(fRealAmt);
+            const rPctVal = parseNum(fRealPct);
+            const autoPct = (!hasPct && hasAmt && proceeds > 0 && (proceeds - rAmtVal) > 0)
+                          ? (rAmtVal / (proceeds - rAmtVal)) * 100 : null;
+            const autoAmt = (!hasAmt && hasPct && proceeds > 0)
+                          ? proceeds - proceeds / (1 + rPctVal / 100) : null;
+            const gColor = (v) => v >= 0 ? '#A82828' : '#2C68B8';
+            return (
+              <div className="mb-5">
+                <label className="label">
+                  실현수익 <span style={{ color:'var(--muted)', fontWeight: 400 }}>· 선택 (한쪽만 넣으면 매도금액 기준 자동 계산)</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <input className="input tabular"
+                           inputMode="text"
+                           placeholder="금액 ₩"
+                           value={fRealAmt}
+                           onChange={e => setFRealAmt(e.target.value)} />
+                    {hasAmt ? (
+                      <div className="mt-1.5 text-xs tabular" style={{ color: gColor(rAmtVal) }}>
+                        {rAmtVal > 0 ? '+' : ''}{formatKoreanWon(rAmtVal)}
+                      </div>
+                    ) : (autoAmt != null && (
+                      <div className="mt-1.5 text-xs tabular" style={{ color: '#0B7048' }}>
+                        자동 {autoAmt >= 0 ? '+' : ''}{formatKoreanWon(autoAmt)}
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <input className="input tabular"
+                           inputMode="text"
+                           placeholder="수익률 %"
+                           value={fRealPct}
+                           onChange={e => setFRealPct(e.target.value)} />
+                    {hasPct ? (
+                      <div className="mt-1.5 text-xs tabular" style={{ color: gColor(rPctVal) }}>
+                        {rPctVal > 0 ? '+' : ''}{rPctVal}%
+                      </div>
+                    ) : (autoPct != null && (
+                      <div className="mt-1.5 text-xs tabular" style={{ color: '#0B7048' }}>
+                        자동 {autoPct >= 0 ? '+' : ''}{autoPct.toFixed(2)}%
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Memo */}
           <div className="mb-6">
