@@ -613,11 +613,18 @@ function App() {
   };
 
   const submit = async () => {
-    const amt = parseNum(fAmount);
+    let amt = parseNum(fAmount);
+    const sh = parseNum(fShares);
+    const avgInput = parseNum(fAvg);
+
+    // 금액을 직접 입력하지 않았으면 수량 × 평단가로 자동 계산
+    if (amt <= 0 && sh > 0 && avgInput > 0) {
+      amt = sh * avgInput;
+    }
 
     if (fType === 'buy' || fType === 'sell') {
       if (!fSymbol.trim()) { setFormError('종목을 선택해주세요'); return; }
-      if (amt <= 0) { setFormError('금액을 입력해주세요'); return; }
+      // 금액은 선택사항 — 비워도 저장됩니다
     } else if (fType === 'dividend') {
       if (amt <= 0) { setFormError('배당 금액을 입력해주세요'); return; }
     } else if (fType === 'note') {
@@ -636,17 +643,16 @@ function App() {
     // 종목: 모든 유형에서 선택 가능(메모 포함)
     if (fSymbol.trim()) base.symbol = fSymbol.trim();
 
-    if (fType === 'buy' || fType === 'sell' || fType === 'dividend') {
+    // 금액: 입력했거나 자동계산된 값이 있을 때만 저장
+    if ((fType === 'buy' || fType === 'sell' || fType === 'dividend') && amt > 0) {
       base.amount = amt;
     }
 
-    // 주식 수: 매수/매도에만
+    // 주식 수 / 평단가: 매수·매도에만
     if (fType === 'buy' || fType === 'sell') {
-      const sh = parseNum(fShares);
       if (sh > 0) base.shares = sh;
 
-      // 평단가: 직접 입력값 우선, 비어 있으면 금액÷수량으로 자동 계산
-      const avgInput = parseNum(fAvg);
+      // 평단가: 직접 입력값 우선, 없으면 금액÷수량으로 자동 계산
       if (avgInput > 0) {
         base.avg = avgInput;
       } else if (sh > 0 && amt > 0) {
@@ -1164,11 +1170,21 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
           <span className="text-xs ml-auto" style={{ color: 'var(--muted)' }}>
             {formatRelative(entry.date)}
           </span>
+          <div className="flex gap-0.5 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+            <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-stone-100" title="수정">
+              <Edit3 size={14} color="var(--muted-2)" />
+            </button>
+            <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-stone-100" title="삭제">
+              <Trash2 size={14} color="#DC4848" />
+            </button>
+          </div>
         </div>
 
-        {entry.amount != null && entry.type !== 'note' && (
+        {entry.type !== 'note' && (entry.amount != null || entry.shares > 0 || entry.avg > 0) && (
           <div className="num-display tabular text-[18px] mt-1.5 flex items-center flex-wrap gap-x-2 gap-y-1" style={{ color: 'var(--ink)' }}>
-            <span>₩{formatKRW(entry.amount)}</span>
+            {entry.amount != null
+              ? <span>₩{formatKRW(entry.amount)}</span>
+              : <span className="text-[13px] font-semibold" style={{ color: 'var(--muted)' }}>금액 미입력</span>}
             {entry.shares > 0 && (
               <span className="text-[12px] font-bold px-2 py-0.5 rounded-md"
                     style={{ background: '#E1ECFC', color: '#2C68B8' }}>
@@ -1190,15 +1206,6 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
             {entry.note}
           </div>
         )}
-      </div>
-
-      <div className="flex gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
-        <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-stone-100" title="수정">
-          <Edit3 size={13} color="var(--muted-2)" />
-        </button>
-        <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-stone-100" title="삭제">
-          <Trash2 size={13} color="#DC4848" />
-        </button>
       </div>
     </div>
   );
@@ -1599,17 +1606,24 @@ function FormModal({
                 {fType === 'buy' && '매수 금액 (₩)'}
                 {fType === 'sell' && '매도 금액 (₩)'}
                 {fType === 'dividend' && '배당 금액 (₩)'}
+                {(fType === 'buy' || fType === 'sell') && (
+                  <span style={{ color:'var(--muted)', fontWeight: 400 }}> · 선택 (비우면 수량×평단가로 자동계산)</span>
+                )}
               </label>
               <input className="input tabular text-lg"
                      inputMode="decimal"
                      placeholder="100,000"
                      value={fAmount}
                      onChange={e => setFAmount(e.target.value)} />
-              {fAmount && parseNum(fAmount) > 0 && (
+              {fAmount && parseNum(fAmount) > 0 ? (
                 <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
                   {formatKoreanWon(parseNum(fAmount))}
                 </div>
-              )}
+              ) : (allowShares && parseNum(fShares) > 0 && parseNum(fAvg) > 0 && (
+                <div className="mt-2 text-xs tabular" style={{ color: '#0B7048' }}>
+                  자동계산: 수량×평단가 = {formatKoreanWon(parseNum(fShares) * parseNum(fAvg))}
+                </div>
+              ))}
             </div>
           )}
 
