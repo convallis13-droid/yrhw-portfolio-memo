@@ -134,8 +134,67 @@ const PREF_KEY    = 'journal_prefs_v1';
 const GOAL_KEY    = 'journal_goal_v1';
 const ACTUALS_KEY = 'journal_actuals_v1';
 const ASSETS_KEY  = 'journal_assets_v3';
+const FXRATE_KEY  = 'journal_fxrate_v1'; // 마지막으로 가져온 USD→KRW 환율 캐시
 const SHARED = true;
 const PAGE_SIZE = 8; // 한 페이지에 보여줄 기록 수
+const DEFAULT_FXRATE = 1380; // 환율을 한 번도 못 받아왔을 때의 임시 기본값
+
+/* USD→KRW 최신 환율 가져오기 (튼튼 버전)
+   - 정적 페이지라 네이버 직접 호출은 CORS로 막힘 → 프록시 경유로 시도
+   - 핵심: 프록시가 죽어도 되도록, CORS를 정식 허용하는 환율 소스를 여러 개 순서대로 시도
+   - 각 요청에 타임아웃(AbortController) → 한 소스가 멈춰도 바로 다음으로
+   - 받은 값이 상식적인 범위(500~3000)를 벗어나면 버림
+   - 성공 시 { rate, source, at } 반환, 전부 실패하면 null (마지막 캐시값 유지) */
+async function fetchUsdKrwRate() {
+  const sane = (v) => typeof v === 'number' && isFinite(v) && v >= 500 && v <= 3000;
+
+  const fetchJSON = async (url, ms = 6000) => {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(id); }
+  };
+
+  const naverUrl = 'https://api.stock.naver.com/marketindex/exchange/FX_USDKRW/prices?page=1&pageSize=2';
+  const naverParse = (d) => {
+    const arr = Array.isArray(d) ? d : (d && Array.isArray(d.result) ? d.result : null);
+    const latest = arr && arr[0];
+    return latest ? parseFloat(String(latest.closePrice).replace(/,/g, '')) : null;
+  };
+
+  // 위에서부터 순서대로 시도, 첫 성공값을 사용
+  const sources = [
+    // 1) 네이버 (프록시 경유) — 한국 마켓에서 보는 실시간 값
+    { name: '네이버', run: async () =>
+        naverParse(await fetchJSON(`https://corsproxy.io/?url=${encodeURIComponent(naverUrl)}`, 6000)) },
+    { name: '네이버', run: async () =>
+        naverParse(await fetchJSON(`https://api.allorigins.win/raw?url=${encodeURIComponent(naverUrl)}`, 8000)) },
+    // 2) CORS 정식 허용 소스 (프록시 불필요 — 가장 안정적, CDN/공식 API)
+    { name: 'frankfurter', run: async () => {
+        const d = await fetchJSON('https://api.frankfurter.app/latest?from=USD&to=KRW');
+        return d && d.rates && d.rates.KRW; } },
+    { name: 'currency-api', run: async () => {
+        const d = await fetchJSON('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json');
+        return d && d.usd && d.usd.krw; } },
+    { name: 'currency-api', run: async () => {
+        const d = await fetchJSON('https://latest.currency-api.pages.dev/v1/currencies/usd.json');
+        return d && d.usd && d.usd.krw; } },
+    { name: 'er-api', run: async () => {
+        const d = await fetchJSON('https://open.er-api.com/v6/latest/USD');
+        return d && d.rates && d.rates.KRW; } },
+  ];
+
+  for (const s of sources) {
+    try {
+      const v = await s.run();
+      if (sane(v)) return { rate: Math.round(v * 100) / 100, source: s.name, at: Date.now() };
+    } catch (e) { /* 다음 소스로 넘어감 */ }
+  }
+  return null;
+}
 
 // 첨부 이미지 + 이전 손익 데이터 기준 초기값
 const DEFAULT_ASSETS = {
@@ -241,6 +300,21 @@ const parseNum = (s) => {
   return isNaN(n) ? 0 : n;
 };
 
+// USD 금액 포맷 ($1,234.56)
+const formatUSD = (n) => {
+  if (n == null || isNaN(n)) return '$0';
+  const dec = Number.isInteger(n) ? 0 : 2;
+  return '$' + new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: 2 }).format(n);
+};
+
+// 통화에 맞춘 금액 표시 (기본 KRW)
+const formatMoney = (n, currency) =>
+  currency === 'USD' ? formatUSD(n) : ('₩' + formatKRW(n));
+
+// 원화 환산 — USD면 환율을 곱하고, 그 외(또는 미지정)는 그대로 원화 취급
+const toKRW = (amount, currency, rate) =>
+  currency === 'USD' ? (amount || 0) * (rate || DEFAULT_FXRATE) : (amount || 0);
+
 // ===== Main App =====
 function App() {
   const [entries, setEntries] = useState([]);
@@ -249,6 +323,8 @@ function App() {
   // 직접 입력한 '현재 금액' (null이면 자동계산값 사용)
   const [actuals, setActuals] = useState({ monthly: null, annual: null, total: null });
   const [assets, setAssets] = useState(DEFAULT_ASSETS);
+  const [fxRate, setFxRate] = useState(DEFAULT_FXRATE);          // 현재 USD→KRW 환율
+  const [fxMeta, setFxMeta] = useState({ source: null, at: null, loading: false });
   const [showAssetsModal, setShowAssetsModal] = useState(false);
   const [confirmState, setConfirmState] = useState(null); // { message, onConfirm }
   const [formError, setFormError] = useState('');
@@ -276,6 +352,7 @@ function App() {
   const [fAuthor, setFAuthor] = useState('yuri');
   const [fDate, setFDate] = useState(todayStr());
   const [fAmount, setFAmount] = useState('');
+  const [fCurrency, setFCurrency] = useState('KRW'); // 'KRW' | 'USD'
   const [fShares, setFShares] = useState('');
   const [fAvg, setFAvg] = useState('');
   const [fRealAmt, setFRealAmt] = useState(''); // 매도 실현수익 (₩)
@@ -377,6 +454,33 @@ function App() {
       } catch (e) {
         try { await window.storage.set(ASSETS_KEY, JSON.stringify(DEFAULT_ASSETS), SHARED); } catch {}
       }
+
+      // FX 환율 캐시 (마지막으로 가져온 값 — 화면에 바로 보여주고 백그라운드로 갱신)
+      try {
+        const fx = await window.storage.get(FXRATE_KEY, SHARED);
+        if (fx?.value) {
+          const parsed = JSON.parse(fx.value);
+          if (parsed && typeof parsed.rate === 'number' && isFinite(parsed.rate)) {
+            setFxRate(parsed.rate);
+            setFxMeta({ source: parsed.source || null, at: parsed.at || null, loading: false });
+          }
+        }
+      } catch (e) {}
+  };
+
+  // 최신 환율 가져와서 갱신 + 캐시 (성공 시 true 반환)
+  const refreshFx = async () => {
+    setFxMeta(m => ({ ...m, loading: true }));
+    const res = await fetchUsdKrwRate();
+    if (res) {
+      setFxRate(res.rate);
+      setFxMeta({ source: res.source, at: res.at, loading: false });
+      try { await window.storage.set(FXRATE_KEY, JSON.stringify(res), SHARED); } catch {}
+      return true;
+    } else {
+      setFxMeta(m => ({ ...m, loading: false }));
+      return false;
+    }
   };
 
   // Load
@@ -398,6 +502,9 @@ function App() {
         }
       } catch (e) {}
       setLoaded(true);
+      // 최신 환율 백그라운드 갱신 — 실패하면 5초 뒤 한 번만 재시도
+      const okFx = await refreshFx();
+      if (!okFx) setTimeout(() => { refreshFx(); }, 5000);
     })();
   }, []);
 
@@ -412,7 +519,7 @@ function App() {
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    try { await loadShared(); } catch (e) {} finally { setRefreshing(false); }
+    try { await loadShared(); await refreshFx(); } catch (e) {} finally { setRefreshing(false); }
   };
 
   const persist = async (next) => {
@@ -495,7 +602,7 @@ function App() {
     };
 
     validEntries.forEach(e => {
-      const amt = e.amount || 0;
+      const amt = toKRW(e.amount, e.currency, fxRate); // USD 기록은 환율로 원화 환산
       const m = e.date ? e.date.slice(0, 7) : null;
       const inMonth = m === curMonth;
       // realized contribution to profit (sell + dividend − buy)
@@ -550,7 +657,7 @@ function App() {
       cumSeries,
       total: validEntries.length,
     };
-  }, [validEntries]);
+  }, [validEntries, fxRate]);
 
   // Achievement % per goal type
   // 유효 현재값: 직접 입력값(override)이 있으면 사용, 없으면 자동계산값
@@ -589,6 +696,7 @@ function App() {
     setFType('buy');
     setFDate(todayStr());
     setFAmount(''); setFShares(''); setFAvg(''); setFRealAmt(''); setFRealPct(''); setFSymbol(''); setFNote('');
+    setFCurrency('KRW');
     setFormError('');
     setEditingId(null);
   };
@@ -607,6 +715,7 @@ function App() {
     setFAuthor(e.author);
     setFDate(e.date);
     setFAmount(e.amount ? String(e.amount) : '');
+    setFCurrency(e.currency === 'USD' ? 'USD' : 'KRW');
     setFShares(e.shares ? String(e.shares) : '');
     setFAvg(e.avg ? String(e.avg) : '');
     setFRealAmt(e.realizedAmt != null ? String(e.realizedAmt) : '');
@@ -646,6 +755,11 @@ function App() {
 
     // 종목: 모든 유형에서 선택 가능(메모 포함)
     if (fSymbol.trim()) base.symbol = fSymbol.trim();
+
+    // 통화: 금액을 다루는 유형(매수/매도/배당)에 기록 (기본 KRW)
+    if (fType === 'buy' || fType === 'sell' || fType === 'dividend') {
+      base.currency = fCurrency;
+    }
 
     // 금액: 입력했거나 자동계산된 값이 있을 때만 저장
     if ((fType === 'buy' || fType === 'sell' || fType === 'dividend') && amt > 0) {
@@ -822,6 +936,7 @@ function App() {
         .anim-in { animation: fadeUp .35s cubic-bezier(.2,.7,.2,1) both; }
         @keyframes fadeUp { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform: translateY(0);} }
         @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+        .spin { animation: spin .8s linear infinite; }
         .sym-wrap:hover .sym-x { opacity: 1; }
         .num-display { font-weight: 800; letter-spacing: -0.02em; }
         .progress-bar { background: var(--fill-2); height: 8px; border-radius: 999px; overflow: hidden; }
@@ -865,6 +980,19 @@ function App() {
                style={{ color: 'var(--muted)' }}>
             YURI & HYUNWOO <span style={{ color: '#D5CFC1' }}>·</span> 우리의 투자 일지
           </div>
+
+          {/* 실시간 USD/KRW 환율 (네이버 기준, 달러 기록 원화 환산에 사용) */}
+          <button onClick={refreshFx} disabled={fxMeta.loading}
+                  className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1 rounded-full tabular"
+                  style={{ background: 'var(--fill)', border: '1px solid var(--border-soft)', color: 'var(--ink-3)' }}
+                  title="탭하면 최신 환율로 갱신">
+            <RefreshCw size={12} className={fxMeta.loading ? 'spin' : ''} color="#10A86F" />
+            $1 = ₩{formatKRW(Math.round(fxRate))}
+            <span style={{ color: 'var(--muted)', fontWeight: 400 }}>
+              {fxMeta.source ? ` · ${fxMeta.source}` : ''}
+              {fxMeta.at ? ` ${new Date(fxMeta.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </span>
+          </button>
 
         </header>
 
@@ -959,7 +1087,7 @@ function App() {
                 <>
                   <div className="flex flex-col">
                     {pageItems.map((e, i) => (
-                      <EntryRow key={e.id} entry={e}
+                      <EntryRow key={e.id} entry={e} fxRate={fxRate}
                                 onEdit={() => openEdit(e)}
                                 onDelete={() => removeEntry(e.id)}
                                 isLast={i === pageItems.length - 1} />
@@ -1025,7 +1153,7 @@ function App() {
                           <div className="pb-3 pl-6">
                             <div className="flex flex-col">
                               {pageItems.map((e, i) => (
-                                <EntryRow key={e.id} entry={e}
+                                <EntryRow key={e.id} entry={e} fxRate={fxRate}
                                           onEdit={() => openEdit(e)}
                                           onDelete={() => removeEntry(e.id)}
                                           isLast={i === pageItems.length - 1} />
@@ -1059,6 +1187,7 @@ function App() {
           fAuthor={fAuthor} setFAuthor={setFAuthor}
           fDate={fDate} setFDate={setFDate}
           fAmount={fAmount} setFAmount={setFAmount}
+          fCurrency={fCurrency} setFCurrency={setFCurrency} fxRate={fxRate}
           fShares={fShares} setFShares={setFShares}
           fAvg={fAvg} setFAvg={setFAvg}
           fRealAmt={fRealAmt} setFRealAmt={setFRealAmt}
@@ -1166,9 +1295,11 @@ function Pager({ page, totalPages, total, onChange }) {
   );
 }
 
-function EntryRow({ entry, onEdit, onDelete, isLast }) {
+function EntryRow({ entry, onEdit, onDelete, isLast, fxRate }) {
   const t = ENTRY_TYPES[entry.type];
   const a = AUTHORS[entry.author];
+  const cur = entry.currency === 'USD' ? 'USD' : 'KRW';
+  const isUSD = cur === 'USD';
 
   return (
     <div className="group flex items-start gap-3 py-2.5"
@@ -1208,8 +1339,13 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
         {entry.type !== 'note' && (entry.amount != null || entry.shares > 0 || entry.avg > 0) && (
           <div className="num-display tabular text-[18px] mt-1.5 flex items-center flex-wrap gap-x-2 gap-y-1" style={{ color: 'var(--ink)' }}>
             {entry.amount != null
-              ? <span>₩{formatKRW(entry.amount)}</span>
+              ? <span>{formatMoney(entry.amount, cur)}</span>
               : <span className="text-[13px] font-semibold" style={{ color: 'var(--muted)' }}>금액 미입력</span>}
+            {isUSD && entry.amount != null && (
+              <span className="text-[11px] font-semibold" style={{ color: 'var(--muted)' }}>
+                ≈ ₩{formatKRW(toKRW(entry.amount, 'USD', fxRate))}
+              </span>
+            )}
             {entry.shares > 0 && (
               <span className="text-[12px] font-bold px-2 py-0.5 rounded-md"
                     style={{ background: '#E1ECFC', color: '#2C68B8' }}>
@@ -1219,7 +1355,7 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
             {entry.avg > 0 && (
               <span className="text-[12px] font-bold px-2 py-0.5 rounded-md"
                     style={{ background: '#EDE7FB', color: '#5B4FBE' }}>
-                평단 ₩{formatKRW(Math.round(entry.avg))}
+                평단 {formatMoney(Math.round(entry.avg * 100) / 100, cur)}
               </span>
             )}
           </div>
@@ -1233,7 +1369,7 @@ function EntryRow({ entry, onEdit, onDelete, isLast }) {
                  style={{ background: gain ? '#FCE2E2' : '#E1ECFC', color: gain ? '#A82828' : '#2C68B8' }}>
               <span>실현수익</span>
               {entry.realizedAmt != null && (
-                <span>{entry.realizedAmt > 0 ? '+' : ''}{formatKRW(entry.realizedAmt)}원</span>
+                <span>{entry.realizedAmt > 0 ? '+' : ''}{formatMoney(entry.realizedAmt, cur)}</span>
               )}
               {entry.realizedPct != null && (
                 <span style={{ opacity: 0.85 }}>
@@ -1429,6 +1565,7 @@ function FormModal({
   editing, symbols, onAddSymbol, onRemoveSymbol,
   fType, setFType, fAuthor, setFAuthor, fDate, setFDate,
   fAmount, setFAmount, fShares, setFShares, fAvg, setFAvg,
+  fCurrency, setFCurrency, fxRate,
   fRealAmt, setFRealAmt, fRealPct, setFRealPct,
   fSymbol, setFSymbol, fNote, setFNote,
   formError, onClose, onSubmit
@@ -1441,6 +1578,14 @@ function FormModal({
   const allowSymbol = needsSymbol || fType === 'dividend' || fType === 'note';
   const needsAmount = fType !== 'note';
   const allowShares = fType === 'buy' || fType === 'sell';
+
+  // 통화 (매수/매도/배당에서만 의미 있음)
+  const cur = fCurrency === 'USD' ? 'USD' : 'KRW';
+  const unit = cur === 'USD' ? '$' : '₩';
+  // 입력값 미리보기: KRW는 만/억 표기, USD는 $ + 원화 환산 병기
+  const prev = (n) => cur === 'USD'
+    ? `${formatUSD(n)}  ≈ ₩${formatKRW(toKRW(n, 'USD', fxRate))}`
+    : formatKoreanWon(n);
 
   const visibleSymbols = useMemo(() => {
     if (fSymbol && !symbols.includes(fSymbol)) return [...symbols, fSymbol];
@@ -1648,26 +1793,50 @@ function FormModal({
           {/* Amount */}
           {needsAmount && (
             <div className="mb-5">
+              {/* 통화 선택 */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="label" style={{ margin: 0 }}>통화</span>
+                <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                  {[['KRW','₩ 원'], ['USD','$ 달러']].map(([k, lbl]) => {
+                    const active = cur === k;
+                    return (
+                      <button key={k} onClick={() => setFCurrency(k)}
+                              className="px-3 py-1.5 text-sm font-semibold transition-colors"
+                              style={{
+                                background: active ? '#0B7048' : 'transparent',
+                                color: active ? '#fff' : 'var(--ink-3)',
+                              }}>
+                        {lbl}
+                      </button>
+                    );
+                  })}
+                </div>
+                {cur === 'USD' && (
+                  <span className="text-xs tabular" style={{ color: 'var(--muted)' }}>
+                    환율 ₩{formatKRW(Math.round(fxRate))}
+                  </span>
+                )}
+              </div>
               <label className="label">
-                {fType === 'buy' && '매수 금액 (₩)'}
-                {fType === 'sell' && '매도 금액 (₩)'}
-                {fType === 'dividend' && '배당 금액 (₩)'}
+                {fType === 'buy' && `매수 금액 (${unit})`}
+                {fType === 'sell' && `매도 금액 (${unit})`}
+                {fType === 'dividend' && `배당 금액 (${unit})`}
                 {(fType === 'buy' || fType === 'sell') && (
                   <span style={{ color:'var(--muted)', fontWeight: 400 }}> · 선택 (비우면 수량×평단가로 자동계산)</span>
                 )}
               </label>
               <input className="input tabular text-lg"
                      inputMode="decimal"
-                     placeholder="100,000"
+                     placeholder={cur === 'USD' ? '1,000' : '100,000'}
                      value={fAmount}
                      onChange={e => setFAmount(e.target.value)} />
               {fAmount && parseNum(fAmount) > 0 ? (
                 <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
-                  {formatKoreanWon(parseNum(fAmount))}
+                  {prev(parseNum(fAmount))}
                 </div>
               ) : (allowShares && parseNum(fShares) > 0 && parseNum(fAvg) > 0 && (
                 <div className="mt-2 text-xs tabular" style={{ color: '#0B7048' }}>
-                  자동계산: 수량×평단가 = {formatKoreanWon(parseNum(fShares) * parseNum(fAvg))}
+                  자동계산: 수량×평단가 = {prev(parseNum(fShares) * parseNum(fAvg))}
                 </div>
               ))}
             </div>
@@ -1686,7 +1855,7 @@ function FormModal({
                      onChange={e => setFShares(e.target.value)} />
               {fShares && parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
                 <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
-                  {parseNum(fShares)}주 · 주당 약 {formatKoreanWon(parseNum(fAmount) / parseNum(fShares))}
+                  {parseNum(fShares)}주 · 주당 약 {prev(parseNum(fAmount) / parseNum(fShares))}
                 </div>
               )}
             </div>
@@ -1696,22 +1865,22 @@ function FormModal({
           {allowShares && (
             <div className="mb-5">
               <label className="label">
-                평단가 (₩/주) <span style={{ color:'var(--muted)' }}>(선택)</span>
+                평단가 ({unit}/주) <span style={{ color:'var(--muted)' }}>(선택)</span>
               </label>
               <input className="input tabular text-lg"
                      inputMode="decimal"
                      placeholder={parseNum(fShares) > 0 && parseNum(fAmount) > 0
                         ? String(Math.round(parseNum(fAmount) / parseNum(fShares)))
-                        : '50,000'}
+                        : (cur === 'USD' ? '50' : '50,000')}
                      value={fAvg}
                      onChange={e => setFAvg(e.target.value)} />
               {fAvg && parseNum(fAvg) > 0 ? (
                 <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
-                  평단가 {formatKoreanWon(parseNum(fAvg))} / 주
+                  평단가 {prev(parseNum(fAvg))} / 주
                 </div>
               ) : (parseNum(fShares) > 0 && parseNum(fAmount) > 0 && (
                 <div className="mt-2 text-xs tabular" style={{ color: 'var(--muted)' }}>
-                  비워두면 금액÷수량({formatKoreanWon(parseNum(fAmount) / parseNum(fShares))})으로 자동 저장돼요
+                  비워두면 금액÷수량({prev(parseNum(fAmount) / parseNum(fShares))})으로 자동 저장돼요
                 </div>
               ))}
             </div>
@@ -1739,16 +1908,16 @@ function FormModal({
                   <div>
                     <input className="input tabular"
                            inputMode="text"
-                           placeholder="금액 ₩"
+                           placeholder={`금액 ${unit}`}
                            value={fRealAmt}
                            onChange={e => setFRealAmt(e.target.value)} />
                     {hasAmt ? (
                       <div className="mt-1.5 text-xs tabular" style={{ color: gColor(rAmtVal) }}>
-                        {rAmtVal > 0 ? '+' : ''}{formatKoreanWon(rAmtVal)}
+                        {rAmtVal > 0 ? '+' : ''}{prev(rAmtVal)}
                       </div>
                     ) : (autoAmt != null && (
                       <div className="mt-1.5 text-xs tabular" style={{ color: '#0B7048' }}>
-                        자동 {autoAmt >= 0 ? '+' : ''}{formatKoreanWon(autoAmt)}
+                        자동 {autoAmt >= 0 ? '+' : ''}{prev(autoAmt)}
                       </div>
                     ))}
                   </div>
